@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,10 +16,19 @@ const config = JSON.parse(readFileSync(join(root, 'packages.json'), 'utf8'));
 const scratch = mkdtempSync(join(tmpdir(), 'cargo-patches-'));
 try {
   const remote = new Map();
+  const sourceCommit = git(root, 'rev-parse', 'HEAD');
   if (mode === '--publish') {
     for (const line of git(root, 'ls-remote', '--refs', 'origin').split('\n').filter(Boolean)) {
       const [hash, ref] = line.split('\t');
       remote.set(ref, hash);
+    }
+  }
+  if (mode === '--publish') {
+    if (git(root, 'status', '--porcelain')) die('Publish requires a clean checkout');
+    if (remote.get('refs/heads/main') !== sourceCommit) {
+      console.log('Skipping stale or non-main patch queue revision');
+      rmSync(scratch, {recursive: true, force: true});
+      process.exit(0);
     }
   }
   const staging = join(scratch, 'staging');
@@ -41,6 +50,7 @@ try {
       git(source, 'fetch', '--quiet', '--depth=1', '--no-tags', pkg.url, pkg.rev);
       if (git(source, 'rev-parse', 'FETCH_HEAD') !== pkg.rev) die('Source revision mismatch');
       git(source, 'checkout', '--quiet', '--detach', 'FETCH_HEAD');
+      if (git(source, 'ls-files', '--stage').split('\n').some(line => line.startsWith('160000 '))) die('Git submodules require an explicit import policy: ' + pkg.name);
       const patch = resolve(root, pkg.patch);
       git(source, 'apply', '--check', patch);
       git(source, 'apply', patch);
@@ -61,9 +71,21 @@ try {
     writeFileSync(join(staging, 'provenance.json'), JSON.stringify({family, packages}, null, 2) + '\n');
     git(staging, 'add', '--force', '--all');
     const tree = git(staging, 'write-tree');
-    if (mode === '--check') continue;
+    if (mode === '--check') {
+      for (const pkg of packages) {
+        const manifest = join(staging, pkg.name, 'Cargo.toml');
+        const metadata = JSON.parse(run(staging, 'cargo', ['metadata', '--no-deps', '--format-version', '1', '--manifest-path', manifest]));
+        if (!metadata.packages.some(p => p.name === pkg.name && p.manifest_path === manifest)) die('Cargo package not discoverable: ' + pkg.name);
+      }
+      continue;
+    }
     const branch = 'refs/heads/generated/' + family;
     const previous = remote.get(branch);
+    const prefix = 'refs/tags/' + family + '-v0.0.';
+    const versions = [...remote.keys()].filter(ref => ref.startsWith(prefix)).map(ref => Number(ref.slice(prefix.length)));
+    if (versions.some(v => !Number.isSafeInteger(v) || v < 1)) die('Invalid publication tag');
+    const latest = Math.max(0, ...versions);
+    if (Boolean(previous) !== Boolean(latest) || (previous && remote.get(prefix + latest) !== previous)) die('Publication branch/tag mismatch: ' + family);
     if (previous) {
       git(root, 'fetch', '--quiet', '--no-tags', 'origin', branch);
       if (git(root, 'rev-parse', 'FETCH_HEAD') !== previous) die('Concurrent publication; retry');
@@ -73,17 +95,20 @@ try {
         continue;
       }
     }
-    const prefix = 'refs/tags/' + family + '-v0.0.';
-    const versions = [...remote.keys()].filter(ref => ref.startsWith(prefix)).map(ref => Number(ref.slice(prefix.length)));
-    if (versions.some(v => !Number.isSafeInteger(v) || v < 1)) die('Invalid publication tag');
-    const tag = prefix + (Math.max(0, ...versions) + 1);
-    const args = ['commit-tree', tree, ...(previous ? ['-p', previous] : []), '-m', 'Publish ' + family + '\n\nPatch source: ' + git(root, 'rev-parse', 'HEAD')];
+    const tag = prefix + (latest + 1);
+    const args = ['commit-tree', tree, ...(previous ? ['-p', previous] : []), '-m', 'Publish ' + family + '\n\nPatch source: ' + sourceCommit];
     const commit = git(staging, ...args);
     git(root, 'fetch', '--quiet', '--no-tags', staging, commit);
     pushes.push(commit + ':' + branch, commit + ':' + tag);
     console.log(family + ': ' + commit + ' -> ' + tag);
   }
-  if (pushes.length) git(root, 'push', '--atomic', 'origin', ...pushes);
+  if (pushes.length) {
+    if (git(root, 'ls-remote', '--refs', 'origin', 'refs/heads/main').split('\t')[0] !== sourceCommit) {
+      console.log('Main changed during preparation; newer CI run will publish');
+    } else {
+      git(root, 'push', '--atomic', 'origin', ...pushes);
+    }
+  }
 } finally {
   rmSync(scratch, {recursive: true, force: true});
 }

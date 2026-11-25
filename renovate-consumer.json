@@ -1,0 +1,44 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Keep published Cargo patch families isolated and group same-family tag changes.",
+  "packageRules": [
+    {
+      "matchDatasources": [
+        "github-tags"
+      ],
+      "matchPackageNames": [
+        "codeandsolder/cargo-patches"
+      ],
+      "versionCompatibility": "^(?<compatibility>[a-z][a-z0-9-]*-v)(?<version>\\d+\\.\\d+\\.\\d+)$",
+      "versioning": "semver"
+    },
+    {
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchDatasources": [
+        "github-tags"
+      ],
+      "matchPackageNames": [
+        "codeandsolder/cargo-patches"
+      ],
+      "matchCurrentValue": "/^wreq-transport-v/",
+      "groupName": "Wreq transport patch family",
+      "groupSlug": "wreq-transport-patch-family"
+    },
+    {
+      "description": "The utility publication pins Wreq and must be upgraded with Wreq and its native TLS provider, not independently.",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchDatasources": [
+        "github-tags"
+      ],
+      "matchPackageNames": [
+        "codeandsolder/cargo-patches"
+      ],
+      "matchCurrentValue": "/^wreq-util-v/",
+      "enabled": false
+    }
+  ]
+}
