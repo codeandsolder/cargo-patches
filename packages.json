@@ -22,7 +22,7 @@
       "replacements": [
         {
           "from": "path = \"../..\"",
-          "to": "git = \"https://github.com/codeandsolder/wreq-exp.git\", rev = \"30088d98b693bd7220480f1c21d08d3502f2c949\"",
+          "to": "git = \"https://github.com/codeandsolder/wreq-exp.git\", rev = \"aad8f97d78e40c4c9fc0ddbb0cf88af870f848ac\"",
           "count": 2
         }
       ]
