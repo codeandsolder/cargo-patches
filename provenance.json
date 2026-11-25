@@ -1,0 +1,17 @@
+{
+  "family": "wreq-transport",
+  "packages": [
+    {
+      "name": "http2",
+      "url": "https://github.com/0x676e67/http2.git",
+      "rev": "3219d38910c22105ea7fc5464696f26589432e9c",
+      "patch": "patches/http2.patch"
+    },
+    {
+      "name": "netty",
+      "url": "https://github.com/0x676e67/netty.git",
+      "rev": "52608f297fb53396e8a5fff5b6a286c1460f667a",
+      "patch": "patches/netty.patch"
+    }
+  ]
+}

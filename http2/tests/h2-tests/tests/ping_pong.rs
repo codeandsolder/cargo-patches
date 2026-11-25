@@ -1,0 +1,801 @@
+use futures::channel::oneshot;
+use futures::StreamExt;
+use h2_support::assert_ping;
+use h2_support::prelude::*;
+use std::pin::Pin;
+use std::task::Poll;
+
+#[tokio::test]
+async fn recv_single_ping() {
+    h2_support::trace_init!();
+    let (m, mut mock) = mock::new();
+
+    // Create the handshake
+    let h2 = async move {
+        let (_client, conn) = client::handshake(m).await.unwrap();
+        let _: () = conn.await.unwrap();
+    };
+
+    let mock = async move {
+        let _ = mock.assert_client_handshake().await;
+        let frame = frame::Ping::new(Default::default());
+        mock.send(frame.into()).await.unwrap();
+        let frame = mock.next().await.unwrap();
+
+        let pong = assert_ping!(frame.unwrap());
+
+        // Payload is correct
+        assert_eq!(*pong.payload(), <[u8; 8]>::default());
+
+        // Is ACK
+        assert!(pong.is_ack());
+    };
+
+    join(mock, h2).await;
+}
+
+#[tokio::test]
+async fn recv_multiple_pings() {
+    h2_support::trace_init!();
+    let (io, mut client) = mock::new();
+
+    let client = async move {
+        let settings = client.assert_server_handshake().await;
+        assert_default_settings!(settings);
+        client.send_frame(frames::ping([1; 8])).await;
+        client.send_frame(frames::ping([2; 8])).await;
+        client.recv_frame(frames::ping([1; 8]).pong()).await;
+        client.recv_frame(frames::ping([2; 8]).pong()).await;
+    };
+
+    let srv = async move {
+        let mut s = server::handshake(io).await.expect("handshake");
+        assert!(s.next().await.is_none());
+    };
+
+    join(client, srv).await;
+}
+
+#[tokio::test]
+async fn pong_has_highest_priority() {
+    h2_support::trace_init!();
+    let (io, mut client) = mock::new();
+
+    let data = Bytes::from(vec![0; 16_384]);
+    let data_clone = data.clone();
+
+    let client = async move {
+        let settings = client.assert_server_handshake().await;
+        assert_default_settings!(settings);
+        client
+            .send_frame(frames::headers(1).request("POST", "https://http2.akamai.com/"))
+            .await;
+        client.send_frame(frames::data(1, data_clone).eos()).await;
+        client.send_frame(frames::ping([1; 8])).await;
+        client.recv_frame(frames::ping([1; 8]).pong()).await;
+        client
+            .recv_frame(frames::headers(1).response(200).eos())
+            .await;
+    };
+
+    let srv = async move {
+        let mut s = server::handshake(io).await.expect("handshake");
+        let (req, mut stream) = s.next().await.unwrap().unwrap();
+        assert_eq!(req.method(), "POST");
+        let body = req.into_parts().1;
+
+        let body = util::concat(body).await.expect("body");
+        assert_eq!(body.len(), data.len());
+        let res = Response::builder().status(200).body(()).unwrap();
+        stream.send_response(res, true).expect("response");
+        assert!(s.next().await.is_none());
+    };
+
+    join(client, srv).await;
+}
+
+#[tokio::test]
+async fn user_ping_pong() {
+    h2_support::trace_init!();
+    let (io, mut srv) = mock::new();
+
+    let srv = async move {
+        let settings = srv.assert_client_handshake().await;
+        assert_default_settings!(settings);
+        srv.recv_frame(frames::ping(frame::Ping::USER)).await;
+        srv.send_frame(frames::ping(frame::Ping::USER).pong()).await;
+        srv.recv_frame(frames::go_away(0)).await;
+        srv.recv_eof().await;
+    };
+
+    let client = async move {
+        let (client, mut conn) = client::handshake(io).await.expect("client handshake");
+        // yield once so we can ack server settings
+        conn.drive(util::yield_once()).await;
+        // `ping_pong()` method conflict with mock future ext trait.
+        let mut ping_pong = client::Connection::ping_pong(&mut conn).expect("taking ping_pong");
+        ping_pong.send_ping(Ping::opaque()).expect("send ping");
+
+        // multiple pings results in a user error...
+        assert_eq!(
+            ping_pong
+                .send_ping(Ping::opaque())
+                .expect_err("ping 2")
+                .to_string(),
+            "user error: send_ping before received previous pong",
+            "send_ping while ping pending is a user error",
+        );
+
+        conn.drive(futures::future::poll_fn(move |cx| ping_pong.poll_pong(cx)))
+            .await
+            .unwrap();
+        drop(client);
+        conn.await.expect("client");
+    };
+
+    join(srv, client).await;
+}
+
+#[tokio::test]
+async fn user_ping_custom_payload() {
+    h2_support::trace_init!();
+    let (io, mut srv) = mock::new();
+    let (tx, rx) = oneshot::channel();
+
+    let srv = async move {
+        let settings = srv.assert_client_handshake().await;
+        assert_default_settings!(settings);
+        srv.recv_frame(frames::ping([7; 8])).await;
+        // An ACK with another payload is ignored. The pong for the server
+        // PING shows that the client has read it.
+        srv.send_frame(frames::ping(frame::Ping::USER).pong()).await;
+        srv.send_frame(frames::ping([1; 8])).await;
+        srv.recv_frame(frames::ping([1; 8]).pong()).await;
+        tx.send(()).unwrap();
+        srv.send_frame(frames::ping([7; 8]).pong()).await;
+        srv.recv_frame(frames::go_away(0)).await;
+        srv.recv_eof().await;
+    };
+
+    let client = async move {
+        let (client, mut conn) = client::handshake(io).await.expect("client handshake");
+        // yield once so we can ack server settings
+        conn.drive(util::yield_once()).await;
+        // `ping_pong()` method conflict with mock future ext trait.
+        let mut ping_pong = client::Connection::ping_pong(&mut conn).expect("taking ping_pong");
+        ping_pong.send_ping(Ping::new([7; 8])).expect("send ping");
+        // A rejected PING does not replace the pending payload.
+        ping_pong
+            .send_ping(Ping::new([2; 8]))
+            .expect_err("send ping while pending");
+
+        conn.drive(rx).await.unwrap();
+        assert!(poll_fn(|cx| Poll::Ready(ping_pong.poll_pong(cx)))
+            .await
+            .is_pending());
+
+        conn.drive(poll_fn(move |cx| ping_pong.poll_pong(cx)))
+            .await
+            .unwrap();
+        drop(client);
+        conn.await.expect("client");
+    };
+
+    join(srv, client).await;
+}
+
+#[tokio::test]
+async fn user_notifies_when_connection_closes() {
+    h2_support::trace_init!();
+    let (io, mut srv) = mock::new();
+    let srv = async move {
+        let settings = srv.assert_client_handshake().await;
+        assert_default_settings!(settings);
+        srv
+    };
+
+    #[allow(clippy::async_yields_async)]
+    let client = async move {
+        let (_client, mut conn) = client::handshake(io).await.expect("client handshake");
+        // yield once so we can ack server settings
+        conn.drive(util::yield_once()).await;
+        conn
+    };
+
+    let (srv, mut client) = join(srv, client).await;
+
+    // `ping_pong()` method conflict with mock future ext trait.
+    let mut ping_pong = client::Connection::ping_pong(&mut client).expect("taking ping_pong");
+
+    // Spawn a thread so we can park a task waiting on `poll_pong`, and then
+    // drop the client and be sure the parked task is notified...
+    let (tx, rx) = oneshot::channel();
+    tokio::spawn(async move {
+        poll_fn(|cx| ping_pong.poll_pong(cx))
+            .await
+            .expect_err("poll_pong should error");
+        tx.send(ping_pong).unwrap();
+    });
+
+    // Sleep to let the ping thread park its task...
+    idle_ms(50).await;
+    drop(client);
+    drop(srv);
+
+    let mut ping_pong = rx.await.expect("ping pong spawn join");
+
+    // Now that the connection is closed, also test `send_ping` errors...
+    assert_eq!(
+        ping_pong
+            .send_ping(Ping::opaque())
+            .expect_err("send_ping")
+            .to_string(),
+        "broken pipe",
+    );
+}
+
+#[tokio::test]
+async fn preface_ping_after_read_idle() {
+    h2_support::trace_init!();
+    let (io, mut srv) = mock::new();
+    let (tx, rx) = oneshot::channel();
+
+    let large = build_large_headers();
+    let get = large.iter().fold(
+        frames::headers(3).request("GET", "https://http2.akamai.com/"),
+        |frame, &(name, ref value)| frame.field(name, &value[..]),
+    );
+
+    let srv = async move {
+        // No PING for a request written before anything is read, nor for
+        // empty DATA.
+        srv.read_preface().await.unwrap();
+        srv.recv_frame(frames::settings()).await;
+        srv.recv_frame(frames::headers(1).request("POST", "https://http2.akamai.com/"))
+            .await;
+        srv.send_frame(frames::settings()).await;
+        srv.recv_frame(frames::settings_ack()).await;
+        srv.send_frame(frames::settings_ack()).await;
+        srv.recv_frame(frames::data(1, "")).await;
+        // The PING follows HEADERS and all of its CONTINUATION frames, and no
+        // other PING is sent while it awaits its ACK.
+        srv.recv_frame(get.eos()).await;
+        srv.recv_frame(frames::ping(1u64.to_be_bytes())).await;
+        srv.recv_frame(frames::data(1, "")).await;
+        srv.recv_frame(frames::data(1, "a")).await;
+        srv.send_frame(frames::ping(1u64.to_be_bytes()).pong())
+            .await;
+        srv.send_frame(frames::headers(3).response(204).eos()).await;
+        // Bytes of a partial, then ignored, unknown frame also reset the idle
+        // time.
+        idle_ms(400).await;
+        srv.send_bytes(&[0, 0, 0, 0xfa, 0]).await;
+        tx.send(()).unwrap();
+        srv.recv_frame(frames::data(1, "b")).await;
+        // The PING precedes DATA.
+        srv.recv_frame(frames::ping(2u64.to_be_bytes())).await;
+        srv.recv_frame(frames::data(1, "c").eos()).await;
+        srv.send_bytes(&[0, 0, 0, 0]).await;
+        srv.send_frame(frames::ping(2u64.to_be_bytes()).pong())
+            .await;
+        srv.send_frame(frames::headers(1).response(204).eos()).await;
+        // The PING armed by a single HEADERS frame precedes the DATA queued
+        // with it.
+        srv.recv_frame(frames::headers(5).request("POST", "https://http2.akamai.com/"))
+            .await;
+        srv.recv_frame(frames::ping(3u64.to_be_bytes())).await;
+        srv.recv_frame(frames::data(5, "d").eos()).await;
+        srv.send_frame(frames::headers(5).response(204).eos()).await;
+    };
+
+    let client = async move {
+        let (mut client, mut conn) = client::Builder::new()
+            .preface_ping(Duration::from_millis(200))
+            .handshake::<_, Bytes>(io)
+            .await
+            .expect("handshake");
+
+        let req = async {
+            let request = Request::post("https://http2.akamai.com/").body(()).unwrap();
+            let (post, mut stream) = client.send_request(request, false).unwrap();
+
+            idle_ms(400).await;
+            stream.send_data(Bytes::new(), false).unwrap();
+            util::yield_once().await;
+
+            let request = large
+                .iter()
+                .fold(
+                    Request::get("https://http2.akamai.com/"),
+                    |request, &(name, ref value)| request.header(name, &value[..]),
+                )
+                .body(())
+                .unwrap();
+            let (get, _) = client.send_request(request, true).unwrap();
+            stream.send_data(Bytes::new(), false).unwrap();
+            stream.send_data("a".into(), false).unwrap();
+            assert_eq!(get.await.unwrap().status(), StatusCode::NO_CONTENT);
+
+            rx.await.unwrap();
+            stream.send_data("b".into(), false).unwrap();
+            idle_ms(400).await;
+            stream.send_data("c".into(), true).unwrap();
+            assert_eq!(post.await.unwrap().status(), StatusCode::NO_CONTENT);
+
+            idle_ms(400).await;
+            let request = Request::post("https://http2.akamai.com/").body(()).unwrap();
+            let (post, mut stream) = client.send_request(request, false).unwrap();
+            stream.send_data("d".into(), true).unwrap();
+            assert_eq!(post.await.unwrap().status(), StatusCode::NO_CONTENT);
+        };
+
+        conn.drive(req).await;
+        conn.await.unwrap();
+    };
+
+    join(srv, client).await;
+}
+
+#[tokio::test]
+async fn preface_ping_waits_for_write_capacity() {
+    h2_support::trace_init!();
+    // Room for the preface, SETTINGS and SETTINGS ACK only.
+    let (io, mut srv) = mock::new_with_write_capacity(42);
+    let (tx, rx) = oneshot::channel();
+
+    let large = build_large_headers();
+    let get = large.iter().fold(
+        frames::headers(1).request("GET", "https://http2.akamai.com/"),
+        |frame, &(name, ref value)| frame.field(name, &value[..]),
+    );
+
+    let srv = async move {
+        let settings = srv.assert_client_handshake().await;
+        assert_default_settings!(settings);
+        // The armed PING waits on the blocked socket. An ACK read meanwhile
+        // leaves it armed, and the PONG for a PING read meanwhile follows it.
+        rx.await.unwrap();
+        srv.send_frame(frames::ping([5; 8]).pong()).await;
+        srv.send_frame(frames::ping([9; 8])).await;
+        util::yield_once().await;
+        srv.unbounded_bytes().await;
+        srv.recv_frame(get.eos()).await;
+        srv.recv_frame(frames::ping(1u64.to_be_bytes())).await;
+        srv.recv_frame(frames::ping([9; 8]).pong()).await;
+        srv.send_frame(frames::headers(1).response(204).eos()).await;
+    };
+
+    let client = async move {
+        let (mut client, mut conn) = client::Builder::new()
+            .preface_ping(Duration::from_millis(200))
+            .handshake::<_, Bytes>(io)
+            .await
+            .expect("handshake");
+        conn.drive(idle_ms(400)).await;
+
+        let request = large
+            .iter()
+            .fold(
+                Request::get("https://http2.akamai.com/"),
+                |request, &(name, ref value)| request.header(name, &value[..]),
+            )
+            .body(())
+            .unwrap();
+        let (response, _) = client.send_request(request, true).unwrap();
+        conn.drive(util::yield_once()).await;
+        tx.send(()).unwrap();
+        let response = conn.drive(response).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        conn.await.unwrap();
+    };
+
+    join(srv, client).await;
+}
+
+#[tokio::test]
+async fn preface_ping_ahead_of_data_in_full_buffer() {
+    // Fills the 16 KiB write buffer of the non-vectored mock until the room
+    // it keeps for one more frame no longer fits a PING as well.
+    const EMPTY_DATA_FRAMES: usize = (16 * 1_024 - (1_024 + 9)) / 9;
+
+    h2_support::trace_init!();
+    let (io, mut srv) = mock::new();
+
+    let srv = async move {
+        let settings = srv.assert_client_handshake().await;
+        assert_default_settings!(settings);
+        srv.recv_frame(frames::headers(1).request("POST", "https://http2.akamai.com/"))
+            .await;
+        for _ in 0..EMPTY_DATA_FRAMES {
+            srv.recv_frame(frames::data(1, "")).await;
+        }
+        srv.recv_frame(frames::ping(1u64.to_be_bytes())).await;
+        srv.recv_frame(frames::data(1, "a").eos()).await;
+        srv.send_frame(frames::headers(1).response(204).eos()).await;
+    };
+
+    let client = async move {
+        let (mut client, mut conn) = client::Builder::new()
+            .preface_ping(Duration::from_millis(200))
+            .handshake::<_, Bytes>(io)
+            .await
+            .expect("handshake");
+
+        let request = Request::post("https://http2.akamai.com/").body(()).unwrap();
+        let (response, mut stream) = client.send_request(request, false).unwrap();
+        conn.drive(idle_ms(400)).await;
+        for _ in 0..EMPTY_DATA_FRAMES {
+            stream.send_data(Bytes::new(), false).unwrap();
+        }
+        stream.send_data("a".into(), true).unwrap();
+        let response = conn.drive(response).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        conn.await.unwrap();
+    };
+
+    join(srv, client).await;
+}
+
+#[tokio::test]
+async fn preface_ping_and_user_ping_take_turns() {
+    h2_support::trace_init!();
+    let (io, mut srv) = mock::new();
+
+    let get = |id| {
+        frames::headers(id)
+            .request("GET", "https://http2.akamai.com/")
+            .eos()
+    };
+
+    let srv = async move {
+        let settings = srv.assert_client_handshake().await;
+        assert_default_settings!(settings);
+        // No preface PING while a user PING awaits its ACK.
+        srv.recv_frame(frames::ping([7; 8])).await;
+        srv.recv_frame(get(1)).await;
+        srv.send_frame(frames::ping([7; 8]).pong()).await;
+        srv.send_frame(frames::headers(1).response(204).eos()).await;
+        // A user PING waits for the ACK of a preface PING, whatever its
+        // payload.
+        srv.recv_frame(get(3)).await;
+        srv.recv_frame(frames::ping(1u64.to_be_bytes())).await;
+        srv.send_frame(frames::headers(3).response(204).eos()).await;
+        srv.recv_frame(get(5)).await;
+        srv.send_frame(frames::ping([0xff; 8]).pong()).await;
+        srv.recv_frame(frames::ping(1u64.to_be_bytes())).await;
+        srv.send_frame(frames::ping(1u64.to_be_bytes()).pong())
+            .await;
+        srv.send_frame(frames::headers(5).response(204).eos()).await;
+    };
+
+    let client = async move {
+        let (mut client, mut conn) = client::Builder::new()
+            .preface_ping(Duration::from_millis(200))
+            .handshake::<_, Bytes>(io)
+            .await
+            .expect("handshake");
+        // `ping_pong()` method conflict with mock future ext trait.
+        let mut ping_pong = client::Connection::ping_pong(&mut conn).expect("taking ping_pong");
+        let mut get = || {
+            let request = Request::get("https://http2.akamai.com/").body(()).unwrap();
+            client.send_request(request, true).unwrap().0
+        };
+
+        ping_pong.send_ping(Ping::new([7; 8])).expect("send ping");
+        conn.drive(idle_ms(400)).await;
+        let response = get();
+        conn.drive(poll_fn(|cx| ping_pong.poll_pong(cx)))
+            .await
+            .unwrap();
+        let response = conn.drive(response).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        conn.drive(idle_ms(400)).await;
+        let response = get();
+        let response = conn.drive(response).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        ping_pong
+            .send_ping(Ping::new(1u64.to_be_bytes()))
+            .expect("send ping");
+        let response = get();
+        conn.drive(poll_fn(|cx| ping_pong.poll_pong(cx)))
+            .await
+            .unwrap();
+        let response = conn.drive(response).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        conn.await.unwrap();
+    };
+
+    join(srv, client).await;
+}
+
+#[tokio::test]
+async fn preface_ping_timeout() {
+    h2_support::trace_init!();
+    let (io, mut srv) = mock::new();
+
+    let get = |id| {
+        frames::headers(id)
+            .request("GET", "https://http2.akamai.com/")
+            .eos()
+    };
+
+    let srv = async move {
+        let settings = srv.assert_client_handshake().await;
+        assert_default_settings!(settings);
+        srv.recv_frame(get(1)).await;
+        srv.recv_frame(frames::ping(1u64.to_be_bytes())).await;
+        srv.send_frame(frames::ping(1u64.to_be_bytes()).pong())
+            .await;
+        srv.send_frame(frames::headers(1).response(204).eos()).await;
+        srv.recv_frame(get(3)).await;
+        srv.recv_frame(frames::ping(2u64.to_be_bytes())).await;
+        // Past the PING's own deadline, while nothing polls the client.
+        idle_ms(500).await;
+        srv.send_frame(frames::headers(3).response(204).eos()).await;
+        srv.recv_frame(frames::go_away(0).protocol_error().data("Failed ping."))
+            .await;
+        srv.recv_eof().await;
+    };
+
+    let client = async move {
+        let (mut client, mut conn) = client::Builder::new()
+            .preface_ping(Duration::from_millis(100))
+            .preface_ping_timeout(Duration::from_millis(400))
+            .handshake::<_, Bytes>(io)
+            .await
+            .expect("handshake");
+        let mut get = || {
+            let request = Request::get("https://http2.akamai.com/").body(()).unwrap();
+            client.send_request(request, true).unwrap().0
+        };
+
+        // The ACK ends the timeout of the first PING.
+        conn.drive(idle_ms(200)).await;
+        let response = get();
+        let response = conn.drive(response).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(conn.preface_ping_deadline(), None);
+        conn.drive(idle_ms(500)).await;
+
+        // A read restarts the timeout of the second, which then runs out.
+        let response = get();
+        conn.drive(util::yield_once()).await;
+        let armed = conn.preface_ping_deadline().unwrap();
+        let response = conn.drive(response).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let deadline = conn.preface_ping_deadline().unwrap();
+        assert!(deadline > armed);
+        tokio::time::sleep_until(deadline.into()).await;
+        let err = conn.await.unwrap_err();
+        assert_eq!(err.reason(), Some(Reason::PROTOCOL_ERROR));
+    };
+
+    join(srv, client).await;
+}
+
+#[tokio::test]
+async fn preface_ping_timeout_while_write_blocked() {
+    h2_support::trace_init!();
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum Close {
+        Timeout,
+        User,
+        Idle,
+        PeerError,
+    }
+
+    // A large header block leaves no room for the PING and the GOAWAY.
+    for (large, close) in [
+        (true, Close::Timeout),
+        (false, Close::Timeout),
+        (true, Close::User),
+        (false, Close::User),
+        (true, Close::Idle),
+        (false, Close::Idle),
+        (false, Close::PeerError),
+    ] {
+        // Room for the preface, SETTINGS and SETTINGS ACK only.
+        let (io, mut srv) = mock::new_with_write_capacity(42);
+        let headers = if large { build_large_headers() } else { vec![] };
+        let get = headers.iter().fold(
+            frames::headers(1).request("GET", "https://http2.akamai.com/"),
+            |frame, &(name, ref value)| frame.field(name, &value[..]),
+        );
+        let mut sent: Vec<frame::Frame> = vec![];
+        let mut received: Vec<frame::Frame> = vec![];
+        match close {
+            Close::Idle if large => sent.extend([
+                frames::headers(1).response(204).eos().into(),
+                frames::window_update(0, 1).into(),
+            ]),
+            Close::Idle => sent.push(frames::window_update(0, 1).into()),
+            Close::PeerError => sent.push(frames::window_update(0, 0).into()),
+            _ => {}
+        }
+        if matches!(close, Close::User | Close::PeerError) {
+            received.push(get.eos().into());
+            if !large {
+                received.push(frames::ping(1u64.to_be_bytes()).into());
+            }
+            let go_away = frames::go_away(0);
+            let go_away = if close == Close::User {
+                go_away
+            } else {
+                go_away.protocol_error()
+            };
+            received.push(go_away.into());
+        }
+        // Each lets the peer send its next frame, and the last one read.
+        let (mut steps, step_rx): (Vec<_>, Vec<_>) =
+            (0..=sent.len()).map(|_| oneshot::channel::<()>()).unzip();
+        steps.reverse();
+
+        let srv = async move {
+            let settings = srv.assert_client_handshake().await;
+            assert_default_settings!(settings);
+            let mut step_rx = step_rx.into_iter();
+            for frame in sent {
+                step_rx.next().unwrap().await.unwrap();
+                srv.send_frame(frame).await;
+            }
+            let _ = step_rx.next().unwrap().await;
+            srv.unbounded_bytes().await;
+            for frame in received {
+                srv.recv_frame(frame).await;
+            }
+            srv.recv_eof().await;
+        };
+
+        let client = async move {
+            let (mut client, mut conn) = client::Builder::new()
+                .preface_ping(Duration::from_millis(100))
+                .preface_ping_timeout(Duration::from_millis(200))
+                .handshake::<_, Bytes>(io)
+                .await
+                .expect("handshake");
+            conn.drive(idle_ms(200)).await;
+            let mut go = || steps.pop().unwrap().send(()).unwrap();
+
+            // The PING armed by the request waits behind the blocked socket,
+            // and its timeout runs meanwhile.
+            let request = headers
+                .iter()
+                .fold(
+                    Request::get("https://http2.akamai.com/"),
+                    |request, &(name, ref value)| request.header(name, &value[..]),
+                )
+                .body(())
+                .unwrap();
+            let (response, _) = client.send_request(request, true).unwrap();
+            conn.drive(util::yield_once()).await;
+            let deadline = conn.preface_ping_deadline().unwrap();
+
+            match close {
+                Close::Timeout => {
+                    // The connection ends without waiting for the peer to read.
+                    tokio::time::sleep_until(deadline.into()).await;
+                    let err = conn.drive(response).await.unwrap_err();
+                    assert_eq!(err.reason(), Some(Reason::PROTOCOL_ERROR));
+                    assert!(err.is_library());
+                    assert_eq!(conn.preface_ping_deadline(), None);
+                    let err = conn.await.unwrap_err();
+                    assert_eq!(err.reason(), Some(Reason::PROTOCOL_ERROR));
+                }
+                Close::User => {
+                    // A GOAWAY of the user's own is kept, waiting for room
+                    // or, already buffered, for the flush.
+                    tokio::time::sleep_until(deadline.into()).await;
+                    conn.abrupt_shutdown(Reason::NO_ERROR);
+                    conn.drive(util::yield_once()).await;
+                    assert_eq!(conn.preface_ping_deadline(), None);
+                    go();
+                    conn.await.unwrap();
+                }
+                Close::Idle => {
+                    // Once the stream is gone, the idle close starts, waiting
+                    // for room or for the flush.
+                    if large {
+                        go();
+                        let response = conn.drive(response).await.unwrap();
+                        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+                    } else {
+                        drop(response);
+                    }
+                    drop(client);
+                    for _ in 0..2 {
+                        let polled = poll_fn(|cx| Poll::Ready(Pin::new(&mut conn).poll(cx))).await;
+                        assert!(polled.is_pending());
+                    }
+                    if !large {
+                        // Closing already, so this GOAWAY is never written.
+                        conn.abrupt_shutdown(Reason::CANCEL);
+                    }
+                    // Input dropped meanwhile moves the deadline, where the
+                    // close ends with its own NO_ERROR.
+                    let closing = conn.preface_ping_deadline().unwrap();
+                    conn.take_read_activity();
+                    go();
+                    idle_ms(10).await;
+                    let polled = poll_fn(|cx| Poll::Ready(Pin::new(&mut conn).poll(cx))).await;
+                    assert!(polled.is_pending());
+                    assert!(conn.take_read_activity());
+                    let deadline = conn.preface_ping_deadline().unwrap();
+                    assert!(deadline > closing);
+                    tokio::time::sleep_until(deadline.into()).await;
+                    conn.await.unwrap();
+                }
+                Close::PeerError => {
+                    // The frame that fails the connection is read after the
+                    // deadline, which it moves, so the GOAWAY waits for the
+                    // flush.
+                    tokio::time::sleep_until(deadline.into()).await;
+                    go();
+                    idle_ms(10).await;
+                    let err = conn.drive(response).await.unwrap_err();
+                    assert_eq!(err.reason(), Some(Reason::PROTOCOL_ERROR));
+                    assert!(conn.preface_ping_deadline().unwrap() > deadline);
+                    go();
+                    let err = conn.await.unwrap_err();
+                    assert_eq!(err.reason(), Some(Reason::PROTOCOL_ERROR));
+                }
+            }
+        };
+
+        join(srv, client).await;
+    }
+}
+
+#[tokio::test]
+async fn user_ping_with_shutdown_payload() {
+    h2_support::trace_init!();
+    let (io, mut client) = mock::new();
+    let (handshake_tx, handshake_rx) = oneshot::channel();
+    let (ping_tx, ping_rx) = oneshot::channel();
+
+    let client = async move {
+        let settings = client.assert_server_handshake().await;
+        assert_default_settings!(settings);
+        handshake_tx.send(()).unwrap();
+        client.recv_frame(frames::ping(frame::Ping::SHUTDOWN)).await;
+        ping_tx.send(()).unwrap();
+        client.recv_frame(frames::go_away(StreamId::MAX)).await;
+        client.recv_frame(frames::ping(frame::Ping::SHUTDOWN)).await;
+        // Equal payloads are acknowledged in write order, so the first ACK
+        // completes the user PING and the shutdown waits for the second.
+        client
+            .send_frame(frames::ping(frame::Ping::SHUTDOWN).pong())
+            .await;
+        client.ping_pong([1; 8]).await;
+        client
+            .send_frame(frames::ping(frame::Ping::SHUTDOWN).pong())
+            .await;
+        client.recv_frame(frames::go_away(0)).await;
+        client.recv_eof().await;
+    };
+
+    let srv = async move {
+        let mut srv = server::handshake(io).await.expect("handshake");
+        let mut ping_pong = srv.ping_pong().expect("taking ping_pong");
+        poll_fn(|cx| srv.poll_closed(cx))
+            .drive(handshake_rx)
+            .await
+            .unwrap();
+        ping_pong
+            .send_ping(Ping::new(frame::Ping::SHUTDOWN))
+            .expect("send ping");
+        poll_fn(|cx| srv.poll_closed(cx))
+            .drive(ping_rx)
+            .await
+            .unwrap();
+        srv.graceful_shutdown();
+        poll_fn(|cx| srv.poll_closed(cx))
+            .drive(poll_fn(|cx| ping_pong.poll_pong(cx)))
+            .await
+            .unwrap();
+        poll_fn(|cx| srv.poll_closed(cx)).await.unwrap();
+    };
+
+    join(client, srv).await;
+}

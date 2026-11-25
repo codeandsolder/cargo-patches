@@ -1,0 +1,48 @@
+# http2
+
+A [Tokio](https://tokio.rs) aware, HTTP/2 client & server implementation for Rust.
+
+[![CI](https://github.com/0x676e67/http2/actions/workflows/CI.yml/badge.svg?branch=master)](https://github.com/0x676e67/http2/actions/workflows/CI.yml)
+[![GitHub License](https://img.shields.io/github/license/0x676e67/http2)](https://github.com/0x676e67/http2/blob/main/LICENSE)
+[![Crates.io](https://img.shields.io/crates/v/http2.svg)](https://crates.io/crates/http2)
+
+More information about this crate can be found in the [crate documentation][dox].
+
+[dox]: https://docs.rs/http2
+
+## Features
+
+- Client and server HTTP/2 implementation.
+- Implements the full HTTP/2 specification.
+- Passes [h2spec](https://github.com/summerwind/h2spec).
+- Focus on performance and correctness.
+- Pseudo header permutation for headers frame.
+- Permuted settings frame & Priority frame.
+- Continues the [h2](https://github.com/hyperium/h2) codebase, tracking upstream changes.
+
+## Usage
+
+To use `http2`, first add this to your `Cargo.toml`:
+
+```toml
+[dependencies]
+http2 = "0.5"
+```
+
+Next, add this to your crate:
+
+```rust
+use http2::client::Connection;
+
+fn main() {
+    // ...
+}
+```
+
+## License
+
+Licensed under either of Apache License, Version 2.0 ([LICENSE](./LICENSE) or http://www.apache.org/licenses/LICENSE-2.0).
+
+## Contribution
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the [Apache-2.0](./LICENSE) license, shall be licensed as above, without any additional terms or conditions.
