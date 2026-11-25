@@ -1,9 +1,39 @@
 {
   "wreq-transport": [
-    {"name":"http2","url":"https://github.com/0x676e67/http2.git","rev":"3219d38910c22105ea7fc5464696f26589432e9c","patch":"patches/http2.patch"},
-    {"name":"netty","url":"https://github.com/0x676e67/netty.git","rev":"52608f297fb53396e8a5fff5b6a286c1460f667a","patch":"patches/netty.patch"}
+    {
+      "name": "http2",
+      "url": "https://github.com/0x676e67/http2.git",
+      "rev": "3219d38910c22105ea7fc5464696f26589432e9c",
+      "patch": "patches/http2.patch"
+    },
+    {
+      "name": "netty",
+      "url": "https://github.com/0x676e67/netty.git",
+      "rev": "52608f297fb53396e8a5fff5b6a286c1460f667a",
+      "patch": "patches/netty.patch"
+    }
   ],
   "wreq-util": [
-    {"name":"wreq-util","url":"https://github.com/0x676e67/wreq-util.git","rev":"917d2581d6761a94db66466caa6c2eb4d4cdbd43","patch":"patches/wreq-util.patch","replacements":[{"from":"path = \"../..\"","to":"git = \"https://github.com/codeandsolder/wreq-exp.git\", rev = \"30088d98b693bd7220480f1c21d08d3502f2c949\"","count":2}]}
+    {
+      "name": "wreq-util",
+      "url": "https://github.com/0x676e67/wreq-util.git",
+      "rev": "917d2581d6761a94db66466caa6c2eb4d4cdbd43",
+      "patch": "patches/wreq-util.patch",
+      "replacements": [
+        {
+          "from": "path = \"../..\"",
+          "to": "git = \"https://github.com/codeandsolder/wreq-exp.git\", rev = \"30088d98b693bd7220480f1c21d08d3502f2c949\"",
+          "count": 2
+        }
+      ]
+    }
+  ],
+  "surrealdb-diskann": [
+    {
+      "name": "surrealdb-diskann",
+      "version": "0.61.0",
+      "checksum": "a953ad510f5c2ead708c8e5ed37df7dec7eb41198bbb6d7fb1d71174851e3511",
+      "patch": "patches/surrealdb-diskann.patch"
+    }
   ]
 }
