@@ -1,0 +1,18 @@
+{
+  "family": "wreq-util",
+  "packages": [
+    {
+      "name": "wreq-util",
+      "url": "https://github.com/0x676e67/wreq-util.git",
+      "rev": "917d2581d6761a94db66466caa6c2eb4d4cdbd43",
+      "patch": "patches/wreq-util.patch",
+      "replacements": [
+        {
+          "from": "path = \"../..\"",
+          "to": "git = \"https://github.com/codeandsolder/wreq-exp.git\", rev = \"30088d98b693bd7220480f1c21d08d3502f2c949\"",
+          "count": 2
+        }
+      ]
+    }
+  ]
+}
