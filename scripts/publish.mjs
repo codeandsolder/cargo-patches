@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -42,15 +43,29 @@ try {
     for (const entry of readdirSync(staging)) if (entry !== '.git') rmSync(join(staging, entry), {recursive: true, force: true});
     const names = new Set();
     for (const pkg of packages) {
-      if (!namePattern.test(pkg.name) || names.has(pkg.name) || !sha.test(pkg.rev) || !/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\.git$/.test(pkg.url) || pkg.patch !== 'patches/' + pkg.name + '.patch') die('Invalid package: ' + JSON.stringify(pkg));
+      if (!namePattern.test(pkg.name) || names.has(pkg.name) || pkg.patch !== 'patches/' + pkg.name + '.patch') die('Invalid package: ' + JSON.stringify(pkg));
       names.add(pkg.name);
       const source = join(scratch, 'source-' + family + '-' + pkg.name);
       mkdirSync(source);
-      git(source, 'init', '--quiet');
-      git(source, 'fetch', '--quiet', '--depth=1', '--no-tags', pkg.url, pkg.rev);
-      if (git(source, 'rev-parse', 'FETCH_HEAD') !== pkg.rev) die('Source revision mismatch');
-      git(source, 'checkout', '--quiet', '--detach', 'FETCH_HEAD');
-      if (git(source, 'ls-files', '--stage').split('\n').some(line => line.startsWith('160000 '))) die('Git submodules require an explicit import policy: ' + pkg.name);
+      let revision;
+      if (pkg.version !== undefined) {
+        if (!/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/.test(pkg.version) || !/^[a-f0-9]{64}$/.test(pkg.checksum) || pkg.url !== undefined || pkg.rev !== undefined) die('Invalid registry source');
+        const archive = join(scratch, family + '-' + pkg.name + '.crate');
+        const stem = pkg.name + '-' + pkg.version;
+        run(scratch, 'curl', ['--fail', '--silent', '--show-error', '--location', '--retry', '3', 'https://static.crates.io/crates/' + pkg.name + '/' + stem + '.crate', '--output', archive]);
+        const actual = createHash('sha256').update(readFileSync(archive)).digest('hex');
+        if (actual !== pkg.checksum) die('Registry archive checksum mismatch: ' + pkg.name);
+        run(source, 'tar', ['-xf', archive, '--strip-components=1', '--no-same-owner', '--no-same-permissions']);
+        revision = pkg.version + ' (sha256 ' + actual + ')';
+      } else {
+        if (!sha.test(pkg.rev) || !/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\.git$/.test(pkg.url) || pkg.checksum !== undefined) die('Invalid Git source');
+        git(source, 'init', '--quiet');
+        git(source, 'fetch', '--quiet', '--depth=1', '--no-tags', pkg.url, pkg.rev);
+        if (git(source, 'rev-parse', 'FETCH_HEAD') !== pkg.rev) die('Source revision mismatch');
+        git(source, 'checkout', '--quiet', '--detach', 'FETCH_HEAD');
+        if (git(source, 'ls-files', '--stage').split('\n').some(line => line.startsWith('160000 '))) die('Git submodules require an explicit import policy: ' + pkg.name);
+        revision = pkg.rev;
+      }
       const patch = resolve(root, pkg.patch);
       git(source, 'apply', '--check', patch);
       git(source, 'apply', patch);
@@ -63,10 +78,10 @@ try {
       }
       writeFileSync(manifest, contents);
       if (!new RegExp('^name = "' + pkg.name + '"$', 'm').test(contents)) die('Package name mismatch: ' + pkg.name);
-      rmSync(join(source, '.git'), {recursive: true});
+      rmSync(join(source, '.git'), {recursive: true, force: true});
       // Workflows are source metadata in nested crates, never root workflows.
       cpSync(source, join(staging, pkg.name), {recursive: true, verbatimSymlinks: true});
-      console.log(family + ': ' + pkg.name + ' @ ' + pkg.rev + ' applied');
+      console.log(family + ': ' + pkg.name + ' @ ' + revision + ' applied');
     }
     writeFileSync(join(staging, 'provenance.json'), JSON.stringify({family, packages}, null, 2) + '\n');
     git(staging, 'add', '--force', '--all');
