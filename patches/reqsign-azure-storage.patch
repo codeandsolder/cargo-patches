@@ -1,0 +1,73 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 532286a..1f87afb 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -11,7 +11,7 @@
+ 
+ [package]
+ edition = "2024"
+-rust-version = "1.86.0"
++rust-version = "1.100"
+ name = "reqsign-azure-storage"
+ version = "3.3.1"
+ build = false
+@@ -116,9 +116,6 @@ version = "4.0"
+ version = "3.3.3"
+ features = ["jwt"]
+ 
+-[target.'cfg(not(target_arch = "wasm32"))'.dependencies.rsa]
+-version = "0.9.2"
+-features = [
+-    "pkcs5",
+-    "sha2",
+-]
++[target.'cfg(not(target_arch = "wasm32"))'.dependencies.btls]
++git = "https://github.com/codeandsolder/btls-fast.git"
++rev = "0fddfc535515622963dfb4cb658ab63dcfa5307d"
+diff --git a/src/provide_credential/client_certificate.rs b/src/provide_credential/client_certificate.rs
+index 5cd98cc..13f4ffd 100644
+--- a/src/provide_credential/client_certificate.rs
++++ b/src/provide_credential/client_certificate.rs
+@@ -24,10 +24,9 @@ use crate::provide_credential::entra::{
+ };
+ use base64::Engine;
+ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
++use btls::pkey::{PKey, PKeyRef, Private};
+ use reqsign_core::time::Timestamp;
+ use reqsign_core::{Context, ProvideCredential};
+-use rsa::RsaPrivateKey;
+-use rsa::pkcs8::DecodePrivateKey;
+ use serde::Serialize;
+ use sha1::{Digest, Sha1};
+ 
+@@ -99,7 +98,7 @@ impl ClientCertificateCredentialProvider {
+         &self,
+         ctx: &Context,
+         path: &str,
+-    ) -> Result<(Vec<u8>, RsaPrivateKey), reqsign_core::Error> {
++    ) -> Result<(Vec<u8>, PKey<Private>), reqsign_core::Error> {
+         let cert_data = ctx.file_read(path).await.map_err(|e| {
+             reqsign_core::Error::credential_invalid(format!("Failed to read certificate file: {e}"))
+         })?;
+@@ -141,11 +140,7 @@ impl ClientCertificateCredentialProvider {
+         })?;
+ 
+         // Parse private key
+-        let private_key = RsaPrivateKey::from_pkcs8_pem(&private_key_pem).map_err(|e| {
+-            reqsign_core::Error::credential_invalid(format!(
+-                "Failed to parse private key from PEM: {e}"
+-            ))
+-        })?;
++        let private_key = reqsign_core::jwt::parse_rsa_private_key(private_key_pem.as_bytes())?;
+ 
+         Ok((cert_der, private_key))
+     }
+@@ -163,7 +158,7 @@ impl ClientCertificateCredentialProvider {
+         tenant_id: &str,
+         client_id: &str,
+         cert_der: &[u8],
+-        private_key: &RsaPrivateKey,
++        private_key: &PKeyRef<Private>,
+     ) -> Result<String, reqsign_core::Error> {
+         let now = SystemTime::now()
+             .duration_since(UNIX_EPOCH)

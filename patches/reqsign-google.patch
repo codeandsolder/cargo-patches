@@ -1,0 +1,178 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 24afc78..2efe721 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -11,7 +11,7 @@
+ 
+ [package]
+ edition = "2024"
+-rust-version = "1.86.0"
++rust-version = "1.100"
+ name = "reqsign-google"
+ version = "3.3.0"
+ build = false
+@@ -99,6 +99,9 @@ version = "1"
+ [dependencies.http]
+ version = "1"
+ 
++[dependencies.hex]
++version = "0.4"
++
+ [dependencies.log]
+ version = "0.4"
+ 
+@@ -115,12 +118,9 @@ version = "3.4.0"
+ [dependencies.reqsign-core]
+ version = "3.3.3"
+ 
+-[dependencies.rsa]
+-version = "0.9.2"
+-features = [
+-    "pkcs5",
+-    "sha2",
+-]
++[dev-dependencies.btls]
++git = "https://github.com/codeandsolder/btls-fast.git"
++rev = "0fddfc535515622963dfb4cb658ab63dcfa5307d"
+ 
+ [dependencies.serde]
+ version = "1"
+diff --git a/src/provide_credential/service_account_token.rs b/src/provide_credential/service_account_token.rs
+index 6e1d86a..23353f1 100644
+--- a/src/provide_credential/service_account_token.rs
++++ b/src/provide_credential/service_account_token.rs
+@@ -339,13 +339,11 @@ mod tests {
+     use std::collections::{BTreeMap, HashMap, VecDeque};
+     use std::sync::{Arc, Mutex};
+ 
++    use btls::{pkey::PKey, rsa::Rsa};
+     use bytes::Bytes;
+     use http::{HeaderMap, Method};
+     use reqsign_core::hash::base64_decode;
+     use reqsign_core::{ErrorKind, FileRead, Granter, HttpSend, StaticEnv, time::Timestamp};
+-    use rsa::RsaPrivateKey;
+-    use rsa::pkcs8::{EncodePrivateKey, LineEnding};
+-    use rsa::rand_core::OsRng;
+     use serde_json::Value;
+ 
+     use crate::{
+@@ -436,11 +434,8 @@ mod tests {
+     }
+ 
+     fn service_account() -> ServiceAccount {
+-        let key = RsaPrivateKey::new(&mut OsRng, 1024).expect("test RSA key must generate");
+-        let private_key = key
+-            .to_pkcs8_pem(LineEnding::LF)
+-            .expect("test RSA key must encode")
+-            .to_string();
++        let key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
++        let private_key = String::from_utf8(key.private_key_to_pem_pkcs8().unwrap()).unwrap();
+         ServiceAccount {
+             private_key,
+             client_email: "provider@example.iam.gserviceaccount.com".to_string(),
+diff --git a/src/sign_request.rs b/src/sign_request.rs
+index a9fd370..37872de 100644
+--- a/src/sign_request.rs
++++ b/src/sign_request.rs
+@@ -18,10 +18,6 @@
+ use http::{Uri, header};
+ use log::debug;
+ use percent_encoding::{percent_decode_str, utf8_percent_encode};
+-use rsa::pkcs1v15::SigningKey;
+-use rsa::pkcs8::DecodePrivateKey;
+-use rsa::rand_core::OsRng;
+-use rsa::signature::RandomizedSigner;
+ use serde::{Deserialize, Serialize};
+ use std::time::Duration;
+ 
+@@ -261,14 +257,10 @@ impl RequestSigner {
+     }
+ 
+     fn sign_with_service_account(private_key_pem: &str, string_to_sign: &str) -> Result<String> {
+-        let mut rng = OsRng;
+-        let private_key = rsa::RsaPrivateKey::from_pkcs8_pem(private_key_pem).map_err(|e| {
+-            reqsign_core::Error::unexpected("failed to parse private key").with_source(e)
+-        })?;
+-        let signing_key = SigningKey::<rsa::sha2::Sha256>::new(private_key);
+-        let signature = signing_key.sign_with_rng(&mut rng, string_to_sign.as_bytes());
+-
+-        Ok(signature.to_string())
++        let private_key = reqsign_core::jwt::parse_rsa_private_key(private_key_pem.as_bytes())?;
++        let signature = reqsign_core::jwt::sign_rs256(&private_key, string_to_sign.as_bytes())?;
++        // Preserve RustCrypto Signature's previous uppercase hexadecimal encoding.
++        Ok(hex::encode_upper(signature))
+     }
+ 
+     fn build_signed_query_with_service_account(
+@@ -687,10 +679,10 @@ fn append_query_fragment(uri: &Uri, fragment: &str) -> Result<Uri> {
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    use btls::{pkey::PKey, rsa::Rsa};
+     use bytes::Bytes;
+     use http::header;
+     use reqsign_core::{ErrorKind, HttpSend, ProvideCredential, Signer};
+-    use rsa::pkcs8::{EncodePrivateKey, LineEnding};
+     use std::sync::atomic::{AtomicUsize, Ordering};
+     use std::sync::{Arc, Mutex};
+ 
+@@ -1063,11 +1055,13 @@ mod tests {
+ 
+     #[tokio::test]
+     async fn service_account_exchange_preserves_optional_expiration_response() -> Result<()> {
+-        let private_key = rsa::RsaPrivateKey::new(&mut OsRng, 1024)
+-            .expect("private key must generate")
+-            .to_pkcs8_pem(LineEnding::LF)
+-            .expect("private key must encode")
+-            .to_string();
++        let private_key = String::from_utf8(
++            PKey::from_rsa(Rsa::generate(2048).unwrap())
++                .unwrap()
++                .private_key_to_pem_pkcs8()
++                .unwrap(),
++        )
++        .unwrap();
+         let credential = Credential::with_service_account(ServiceAccount {
+             private_key,
+             client_email: "signer@example.iam.gserviceaccount.com".to_string(),
+diff --git a/tests/oauth_token_endpoint.rs b/tests/oauth_token_endpoint.rs
+index e7b6db0..3658f62 100644
+--- a/tests/oauth_token_endpoint.rs
++++ b/tests/oauth_token_endpoint.rs
+@@ -17,6 +17,7 @@
+ 
+ use std::sync::{Arc, Mutex, OnceLock};
+ 
++use btls::{pkey::PKey, rsa::Rsa};
+ use bytes::Bytes;
+ use http::{Request, Response, StatusCode};
+ use reqsign_core::hash::base64_decode;
+@@ -27,9 +28,6 @@ use reqsign_google::{
+     ServerSideCredentialAccessBoundaryGranter, ServiceAccount,
+     ServiceAccountTokenCredentialProvider, StaticCredentialProvider,
+ };
+-use rsa::RsaPrivateKey;
+-use rsa::pkcs8::{EncodePrivateKey, LineEnding};
+-use rsa::rand_core::OsRng;
+ use serde::Deserialize;
+ use serde_json::{Value, json};
+ 
+@@ -65,11 +63,13 @@ fn service_account() -> ServiceAccount {
+     ServiceAccount {
+         private_key: KEY
+             .get_or_init(|| {
+-                RsaPrivateKey::new(&mut OsRng, 1024)
+-                    .unwrap()
+-                    .to_pkcs8_pem(LineEnding::LF)
+-                    .unwrap()
+-                    .to_string()
++                String::from_utf8(
++                    PKey::from_rsa(Rsa::generate(2048).unwrap())
++                        .unwrap()
++                        .private_key_to_pem_pkcs8()
++                        .unwrap(),
++                )
++                .unwrap()
+             })
+             .clone(),
+         client_email: "test@example.iam.gserviceaccount.com".into(),
