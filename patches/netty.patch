@@ -1,0 +1,138 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index a75d150..841535a 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -58,7 +58,7 @@ tokio-util = { version = "0.7.18", default-features = false, features = ["io"] }
+ 
+ # Optional deps...
+ 
+-http2 = { version = "0.5.20", features = ["unstable"], optional = true }
++http2 = { version = "0.5.20", path = "../http2", features = ["unstable"], optional = true }
+ futures-channel = { version = "0.3.32", optional = true }
+ http3 = { version = "0.2.0", features = ["unstable"], optional = true }
+ http3-datagram = { version = "0.2.0", optional = true }
+diff --git a/src/conn/http2.rs b/src/conn/http2.rs
+index e263bae..3cfe385 100644
+--- a/src/conn/http2.rs
++++ b/src/conn/http2.rs
+@@ -25,6 +25,22 @@ use crate::{
+ };
+ 
+ /// The sender side of an established connection.
++/// HTTP/2 connection preface observations, retaining raw wire order.
++#[derive(Debug, Clone, Default, Eq, PartialEq)]
++pub struct Http2Observation {
++    /// Client SETTINGS entries in their exact emitted order.
++    pub local_settings: Vec<(u16, u32)>,
++    /// Whether the peer initial SETTINGS frame has arrived.
++    pub peer_settings_received: bool,
++    /// Initial peer SETTINGS entries in their exact received order.
++    pub peer_settings: Vec<(u16, u32)>,
++    /// Increment and whether the first peer connection WINDOW_UPDATE preceded the SETTINGS ACK.
++    pub first_connection_window_update: Option<(u32, bool)>,
++    /// Whether the remote acknowledged the client initial SETTINGS.
++    pub peer_settings_ack_received: bool,
++}
++
++/// Sender handle for a pooled HTTP/2 client connection.
+ pub struct SendRequest<B> {
+     dispatch: dispatch::UnboundedSender<Request<B>, Response<Incoming>>,
+     peer: Arc<proto::http2::client::PeerSettings>,
+@@ -120,6 +136,11 @@ impl<B> SendRequest<B> {
+         self.dispatch.is_closed()
+     }
+ 
++    /// Snapshot connection preface metadata, including for a reused connection.
++    pub fn http2_observation(&self) -> Http2Observation {
++        self.peer.http2_observation()
++    }
++
+     /// Returns whether the server enabled [extended CONNECT][1].
+     ///
+     /// Returns `None` until the server's [`SETTINGS_ENABLE_CONNECT_PROTOCOL`][2] arrives,
+@@ -390,14 +411,22 @@ where
+             self.opts.ping_payload,
+         );
+ 
++        let local_settings = builder
++            .local_initial_settings()
++            .encoded_settings()
++            .iter()
++            .map(|s| (s.id(), s.value()))
++            .collect();
+         let (tx, rx) = dispatch::channel();
+         let h2 =
+             proto::http2::client::handshake(io, rx, builder, ping_config, self.exec, self.timer)
+                 .await?;
++        let peer = h2.peer_settings();
++        peer.set_local_settings(local_settings);
+         Ok((
+             SendRequest {
+                 dispatch: tx.unbound(),
+-                peer: h2.peer_settings(),
++                peer,
+             },
+             Connection {
+                 inner: (PhantomData, h2),
+diff --git a/src/proto/http2/client.rs b/src/proto/http2/client.rs
+index ea29f88..808e7a5 100644
+--- a/src/proto/http2/client.rs
++++ b/src/proto/http2/client.rs
+@@ -198,6 +198,8 @@ where
+             *this.pending_window = None;
+             poll = Pin::new(&mut this.conn).poll(cx);
+         }
++        // Update the shared snapshot after incoming HTTP/2 frames were processed.
++        this.peer.update_http2_observation(&this.conn);
+         // Any bytes count as read activity for keep-alive, including control
+         // frames the connection handles itself.
+         if this.conn.take_read_activity() {
+@@ -354,6 +356,7 @@ pub(crate) struct PeerSettings {
+     waker: AtomicWaker,
+     parked: AtomicBool,
+     conn_waker: AtomicWaker,
++    observation: std::sync::Mutex<crate::conn::http2::Http2Observation>,
+ }
+ 
+ // ===== impl PeerSettings =====
+@@ -369,6 +372,40 @@ impl PeerSettings {
+             waker: AtomicWaker::new(),
+             parked: AtomicBool::new(false),
+             conn_waker: AtomicWaker::new(),
++            observation: std::sync::Mutex::new(Default::default()),
++        }
++    }
++
++    pub(crate) fn set_local_settings(&self, local: Vec<(u16, u32)>) {
++        self.observation.lock().unwrap().local_settings = local;
++    }
++
++    pub(crate) fn http2_observation(&self) -> crate::conn::http2::Http2Observation {
++        self.observation.lock().unwrap().clone()
++    }
++
++    fn update_http2_observation<T, B>(&self, conn: &Connection<T, B>)
++    where
++        T: AsyncRead + AsyncWrite + Unpin,
++        B: bytes::Buf,
++    {
++        let mut info = self.observation.lock().unwrap();
++        if !info.peer_settings_received {
++            if let Some(settings) = conn.remote_initial_settings() {
++                info.peer_settings_received = true;
++                info.peer_settings = settings
++                    .observed_settings()
++                    .unwrap_or_default()
++                    .iter()
++                    .map(|setting| (setting.id(), setting.value()))
++                    .collect();
++            }
++        }
++        if info.first_connection_window_update.is_none() {
++            info.first_connection_window_update = conn.remote_first_connection_window_update();
++        }
++        if !info.peer_settings_ack_received {
++            info.peer_settings_ack_received = conn.remote_initial_settings_ack_received();
+         }
+     }
+ 

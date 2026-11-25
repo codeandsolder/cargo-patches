@@ -1,0 +1,203 @@
+diff --git a/src/client.rs b/src/client.rs
+index 8625e21..73cc443 100644
+--- a/src/client.rs
++++ b/src/client.rs
+@@ -1366,6 +1366,11 @@ impl Builder {
+         self
+     }
+ 
++    /// Returns the precise initial SETTINGS frame this client builder will send.
++    pub fn local_initial_settings(&self) -> &Settings {
++        &self.settings
++    }
++
+     /// Sets the order of settings parameters in the initial SETTINGS frame.
+     ///
+     /// This determines the order in which settings are sent during the HTTP/2 handshake.
+@@ -1870,6 +1875,21 @@ where
+         self.inner.max_recv_streams()
+     }
+ 
++    /// Returns the peer initial SETTINGS frame, if one was received.
++    pub fn remote_initial_settings(&self) -> Option<Settings> {
++        self.inner.streams().remote_initial_settings()
++    }
++
++    /// Returns the first connection WINDOW_UPDATE increment and its order relative to SETTINGS ACK.
++    pub fn remote_first_connection_window_update(&self) -> Option<(u32, bool)> {
++        self.inner.streams().remote_first_connection_window_update()
++    }
++
++    /// Returns whether the peer has acknowledged our initial SETTINGS frame.
++    pub fn remote_initial_settings_ack_received(&self) -> bool {
++        self.inner.streams().remote_initial_settings_ack_received()
++    }
++
+     fn set_initial_stream_window_size(&mut self, target: u32, advertised: u32) {
+         self.inner
+             .set_initial_stream_window_size(target, advertised);
+diff --git a/src/frame/mod.rs b/src/frame/mod.rs
+index 8237ad1..c793aa4 100644
+--- a/src/frame/mod.rs
++++ b/src/frame/mod.rs
+@@ -66,7 +66,7 @@ pub use self::reset::Reset;
+ #[cfg(feature = "unstable")]
+ pub use self::settings::{ExperimentalSettings, ExperimentalSettingsBuilder};
+ #[allow(unused_imports)]
+-pub use self::settings::{Setting, SettingId, Settings, SettingsOrder, SettingsOrderBuilder};
++pub use self::settings::{ObservedSetting, Setting, SettingId, Settings, SettingsOrder, SettingsOrderBuilder};
+ pub use self::stream_id::{StreamId, StreamIdOverflow};
+ pub use self::window_update::WindowUpdate;
+ 
+diff --git a/src/frame/settings.rs b/src/frame/settings.rs
+index 966c792..d9d6ab3 100644
+--- a/src/frame/settings.rs
++++ b/src/frame/settings.rs
+@@ -241,6 +241,19 @@ pub struct Settings {
+     experimental_settings: Option<ExperimentalSettings>,
+     // Settings order
+     settings_order: SettingsOrder,
++    observed_settings: Option<SmallVec<[ObservedSetting; SettingId::DEFAULT_STACK_SIZE]>>,
++}
++
++/// A raw HTTP/2 SETTINGS entry, preserving its on-wire ID and value.
++#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
++pub struct ObservedSetting {
++    id: u16,
++    value: u32,
++}
++
++impl ObservedSetting {
++    pub fn id(&self) -> u16 { self.id }
++    pub fn value(&self) -> u32 { self.value }
+ }
+ 
+ /// A struct representing a single HTTP/2 setting that can be sent in a SETTINGS
+@@ -288,6 +301,23 @@ impl Settings {
+         self.flags.is_ack()
+     }
+ 
++    /// Entries of a decoded peer frame, preserving ordering and unknown identifiers.
++    pub fn observed_settings(&self) -> Option<&[ObservedSetting]> {
++        self.observed_settings.as_deref()
++    }
++
++    /// Entries this locally constructed frame will emit, in exact wire order.
++    pub fn encoded_settings(&self) -> Vec<ObservedSetting> {
++        let mut observed = Vec::new();
++        self.for_each(|setting| {
++            observed.push(ObservedSetting {
++                id: u16::from(setting.id),
++                value: setting.value,
++            });
++        });
++        observed
++    }
++
+     pub fn initial_window_size(&self) -> Option<u32> {
+         self.initial_window_size
+     }
+@@ -388,8 +418,13 @@ impl Settings {
+ 
+         let mut settings = Settings::default();
+         debug_assert!(!settings.flags.is_ack());
++        let mut observed = SmallVec::new();
+ 
+         for raw in payload.chunks(6) {
++            observed.push(ObservedSetting {
++                id: u16::from_be_bytes([raw[0], raw[1]]),
++                value: u32::from_be_bytes([raw[2], raw[3], raw[4], raw[5]]),
++            });
+             if let Some(setting) = Setting::load(raw) {
+                 match setting.id {
+                     SettingId::HeaderTableSize => {
+@@ -448,6 +483,7 @@ impl Settings {
+             }
+         }
+ 
++        settings.observed_settings = Some(observed);
+         Ok(settings)
+     }
+ 
+diff --git a/src/proto/settings.rs b/src/proto/settings.rs
+index f970d85..16ab49d 100644
+--- a/src/proto/settings.rs
++++ b/src/proto/settings.rs
+@@ -77,6 +77,7 @@ impl Settings {
+                     }
+ 
+                     streams.apply_local_settings(local)?;
++                    streams.mark_remote_initial_settings_ack_received();
+                     self.local = Local::Synced;
+                     Ok(())
+                 }
+diff --git a/src/proto/streams/streams.rs b/src/proto/streams/streams.rs
+index 2de949a..5c5929a 100644
+--- a/src/proto/streams/streams.rs
++++ b/src/proto/streams/streams.rs
+@@ -107,6 +107,9 @@ struct Inner {
+ 
+     /// Pseudo order of the headers stream
+     headers_pseudo_order: Option<PseudoOrder>,
++    remote_initial_settings: Option<frame::Settings>,
++    remote_first_connection_window_update: Option<(u32, bool)>,
++    remote_initial_settings_ack_received: bool,
+ }
+ 
+ #[derive(Debug)]
+@@ -287,6 +290,9 @@ where
+     ) -> Result<(), Error> {
+         let mut me = self.inner.lock();
+         let me = &mut *me;
++        if is_initial {
++            me.remote_initial_settings = Some(frame.clone());
++        }
+ 
+         let mut send_buffer = self.send_buffer.inner.lock();
+         let send_buffer = &mut *send_buffer;
+@@ -302,6 +308,22 @@ where
+         )
+     }
+ 
++    pub fn remote_initial_settings(&self) -> Option<frame::Settings> {
++        self.inner.lock().remote_initial_settings.clone()
++    }
++
++    pub fn remote_first_connection_window_update(&self) -> Option<(u32, bool)> {
++        self.inner.lock().remote_first_connection_window_update
++    }
++
++    pub fn remote_initial_settings_ack_received(&self) -> bool {
++        self.inner.lock().remote_initial_settings_ack_received
++    }
++
++    pub fn mark_remote_initial_settings_ack_received(&mut self) {
++        self.inner.lock().remote_initial_settings_ack_received = true;
++    }
++
+     pub fn apply_local_settings(&mut self, frame: &frame::Settings) -> Result<(), Error> {
+         let mut me = self.inner.lock();
+         let me = &mut *me;
+@@ -530,6 +552,9 @@ impl Inner {
+             refs: 1,
+             headers_priority_policy: config.headers_priority_policy,
+             headers_pseudo_order: config.headers_pseudo_order,
++            remote_initial_settings: None,
++            remote_first_connection_window_update: None,
++            remote_initial_settings_ack_received: false,
+         }))
+     }
+ 
+@@ -820,6 +845,12 @@ impl Inner {
+         let send_buffer = &mut *send_buffer;
+ 
+         if id.is_zero() {
++            if self.remote_first_connection_window_update.is_none() {
++                self.remote_first_connection_window_update = Some((
++                    frame.size_increment(),
++                    !self.remote_initial_settings_ack_received,
++                ));
++            }
+             self.actions
+                 .send
+                 .recv_connection_window_update(frame, &mut self.store, &mut self.counts)

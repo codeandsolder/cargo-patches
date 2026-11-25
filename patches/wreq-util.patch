@@ -1,0 +1,483 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 2b18db1..c9a26a0 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -22,7 +22,7 @@ default = ["emulation"]
+ tokio-rt = ["wreq/tokio-rt"]
+ compio-rt = ["wreq/compio-rt"]
+ 
+-emulation = ["dep:typed-builder", "dep:brotli", "dep:flate2", "dep:zstd"]
++emulation = ["dep:typed-builder", "dep:brotli", "dep:flate2", "dep:zstd", "wreq/http2"]
+ emulation-serde = ["dep:serde"]
+ emulation-compression = []
+ emulation-chromium-pki = ["emulation", "dep:chromium-roots", "wreq/chromium-roots"]
+@@ -30,7 +30,7 @@ emulation-chromium-pki = ["emulation", "dep:chromium-roots", "wreq/chromium-root
+ tower-delay = ["dep:tower", "dep:pin-project-lite", "tokio/time"]
+ 
+ [dependencies]
+-wreq = { version = "0.16.1", default-features = false }
++wreq = { path = "../..", default-features = false }
+ 
+ # Optional deps...
+ 
+@@ -47,7 +47,7 @@ flate2 = { version = "1.1.9", optional = true }
+ zstd = { version = "0.14.3", optional = true }
+ 
+ [dev-dependencies]
+-wreq = "0.16.1"
++wreq = { path = "../.." }
+ serde_json = "1.0.151"
+ tokio = { version = "1.48.0", features = ["full"] }
+ hyper = { version = "1.10.1", default-features = false, features = [
+@@ -95,8 +95,3 @@ required-features = ["emulation"]
+ name = "tower_delay"
+ path = "examples/tower_delay.rs"
+ required-features = ["tower-delay"]
+-
+-[patch.crates-io]
+-wreq = { git = "https://github.com/0x676e67/wreq", rev = "cd76bcdf1307153de289d34e072528bdf0510a3b" }
+-btls = { git = "https://github.com/0x676e67/btls", rev = "129887582a538b8f4dcf371d15c953335312ca37" }
+-btls-sys = { git = "https://github.com/0x676e67/btls", rev = "129887582a538b8f4dcf371d15c953335312ca37" }
+diff --git a/UPSTREAM.md b/UPSTREAM.md
+new file mode 100644
+index 0000000..ef12633
+--- /dev/null
++++ b/UPSTREAM.md
+@@ -0,0 +1,22 @@
++# Vendored wreq-util browser profile compatibility
++
++Source: https://github.com/0x676e67/wreq-util at `917d2581d6761a94db66466caa6c2eb4d4cdbd43`, Apache-2.0 (LICENSE).
++
++This copy is maintained alongside codeandsolder/wreq-exp because the published
++wreq-util 0.2.1 targets removed options in current Wreq: the old HEADERS
++stream dependency builder and the preserve-TLS-1.3-cipher-list toggle.
++
++The new HEADERS priority API preserves the original parent, wire weight and
++exclusivity semantics, including Firefox's declared idle parent stream 13.
++The TLS 1.3 cipher order is explicitly configured for Chrome, Firefox, Opera
++and modern OkHttp profiles as well as Safari variants requesting cipher-list preservation.
++Legacy OkHttp profiles that name no TLS 1.3 suites leave the backend defaults
++untouched; an empty explicit list is not injected.
++
++Removed AES hardware overrides have been replaced by explicit TLS 1.3 suite
++order and AES-128-GCM ECH GREASE policies, preventing the emulated fingerprint
++from changing with the machine's AES hardware capabilities.
++
++Wreq is a path dependency on the repository root, so compatibility changes
++are checked against exactly the Wreq implementation used by downstream tools.
++Preserve all browser and platform variants; do not substitute partial profiles.
+diff --git a/src/emulate/profile.rs b/src/emulate/profile.rs
+index 11a98cc..ff9f5d6 100644
+--- a/src/emulate/profile.rs
++++ b/src/emulate/profile.rs
+@@ -13,12 +13,12 @@ use wreq::{
+     Group,
+     header::{ACCEPT, ACCEPT_LANGUAGE, HeaderMap, HeaderName, HeaderValue, USER_AGENT},
+     http2::{
+-        Http2Options, Priorities, Priority, PseudoId, PseudoOrder, SettingId, SettingsOrder,
+-        StreamDependency, StreamId,
++        HeadersDependency, HeadersPriority, Http2Options, Priorities, Priority, PseudoId,
++        PseudoOrder, SettingId, SettingsOrder, StreamDependency, StreamId,
+     },
+     tls::{
+-        AlpnProtocol, AlpsProtocol, ExtensionType, KeyShare, TlsOptions, TlsVersion,
+-        compress::CertificateCompressor,
++        AlpnProtocol, AlpsProtocol, EchGrease, EchGreaseAead, ExtensionType, KeyShare, Tls13Cipher,
++        TlsOptions, TlsVersion, compress::CertificateCompressor,
+     },
+ };
+ 
+@@ -27,6 +27,28 @@ use super::{
+     compress::{BrotliCompressor, ZlibCompressor, ZstdCompressor},
+ };
+ 
++/// Mirror browser profiles that previously requested AES hardware overrides.
++/// Their ECH GREASE AEAD must be deterministic, not dependent on CPU flags.
++fn ech_grease_aes(enabled: bool) -> Option<EchGrease> {
++    enabled.then_some(EchGrease::Aead(EchGreaseAead::AES_128_GCM))
++}
++
++/// Extract TLS 1.3 suites from the combined browser cipher list in wire order.
++///
++/// The only TLS 1.3 suites currently defined by BoringSSL are handled; legacy
++/// cipher names are left to the separate TLS 1.2 cipher-list setting.
++fn tls13_ciphers_in_wire_order(cipher_list: &str) -> Vec<Tls13Cipher> {
++    cipher_list
++        .split(':')
++        .filter_map(|suite| match suite {
++            "TLS_AES_128_GCM_SHA256" => Some(Tls13Cipher::AES_128_GCM_SHA256),
++            "TLS_AES_256_GCM_SHA384" => Some(Tls13Cipher::AES_256_GCM_SHA384),
++            "TLS_CHACHA20_POLY1305_SHA256" => Some(Tls13Cipher::CHACHA20_POLY1305_SHA256),
++            _ => None,
++        })
++        .collect()
++}
++
+ fn build_standard_emulation(
+     group: &'static str,
+     tls_options: TlsOptions,
+diff --git a/src/emulate/profile/chrome/http2.rs b/src/emulate/profile/chrome/http2.rs
+index 841c8a4..a47190a 100644
+--- a/src/emulate/profile/chrome/http2.rs
++++ b/src/emulate/profile/chrome/http2.rs
+@@ -1,6 +1,6 @@
+-macro_rules! headers_stream_dependency {
++macro_rules! headers_priority {
+     () => {
+-        StreamDependency::new(StreamId::zero(), 255, true)
++        HeadersPriority::new(HeadersDependency::Root, 255, true)
+     };
+ }
+ 
+@@ -41,7 +41,7 @@ macro_rules! http2_options {
+             .initial_connection_window_size(15728640)
+             .max_header_list_size(262144)
+             .header_table_size(65536)
+-            .headers_stream_dependency(headers_stream_dependency!())
++            .headers_priority(headers_priority!())
+             .headers_pseudo_order(pseudo_order!())
+             .settings_order(settings_order!())
+     };
+diff --git a/src/emulate/profile/chrome/tls.rs b/src/emulate/profile/chrome/tls.rs
+index 5f8786e..3c404bf 100644
+--- a/src/emulate/profile/chrome/tls.rs
++++ b/src/emulate/profile/chrome/tls.rs
+@@ -214,14 +214,14 @@ impl From<ChromeTlsConfig> for TlsOptions {
+             .curves_list(val.curves)
+             .sigalgs_list(val.sigalgs_list)
+             .cipher_list(val.cipher_list)
++            .tls13_cipher_list(tls13_ciphers_in_wire_order(val.cipher_list))
+             .min_tls_version(TlsVersion::TLS_1_2)
+             .max_tls_version(TlsVersion::TLS_1_3)
+             .permute_extensions(val.permute_extensions)
+             .pre_shared_key(val.pre_shared_key)
+-            .enable_ech_grease(val.enable_ech_grease)
++            .ech_grease(ech_grease_aes(val.enable_ech_grease))
+             .alps_protocols([val.alps_protos])
+             .alps_use_new_codepoint(val.alps_use_new_codepoint)
+-            .aes_hw_override(true)
+             .certificate_compressors(CERTIFICATE_COMPRESSORS)
+             .build();
+         if let Some(trust_anchors) = val.trust_anchors {
+diff --git a/src/emulate/profile/firefox/http2.rs b/src/emulate/profile/firefox/http2.rs
+index b7f18f7..4847d13 100644
+--- a/src/emulate/profile/firefox/http2.rs
++++ b/src/emulate/profile/firefox/http2.rs
+@@ -1,9 +1,13 @@
+-macro_rules! headers_stream_dependency {
++macro_rules! headers_priority {
+     (1) => {
+-        StreamDependency::new(StreamId::zero(), 41, false)
++        HeadersPriority::new(HeadersDependency::Root, 41, false)
+     };
+     (2) => {
+-        StreamDependency::new(StreamId::from(13), 41, false)
++        HeadersPriority::new(
++            HeadersDependency::Declared(StreamId::from(13).into()),
++            41,
++            false,
++        )
+     };
+ }
+ 
+@@ -52,14 +56,14 @@ macro_rules! http2_options {
+             .initial_stream_id(3)
+             .header_table_size(65536)
+             .enable_push(false)
+-            .headers_stream_dependency(headers_stream_dependency!(1))
++            .headers_priority(headers_priority!(1))
+             .build()
+     };
+     (2) => {
+         http2_options!(@base Http2Options::builder())
+             .initial_stream_id(15)
+             .header_table_size(65536)
+-            .headers_stream_dependency(headers_stream_dependency!(2))
++            .headers_priority(headers_priority!(2))
+             .priorities(
+                 Priorities::builder()
+                     .extend([
+@@ -98,7 +102,7 @@ macro_rules! http2_options {
+             .header_table_size(65536)
+             .enable_push(false)
+             .max_concurrent_streams(0)
+-            .headers_stream_dependency(headers_stream_dependency!(1))
++            .headers_priority(headers_priority!(1))
+             .build()
+     };
+     (4) => {
+@@ -107,7 +111,7 @@ macro_rules! http2_options {
+             .header_table_size(4096)
+             .enable_push(false)
+             .initial_window_size(32768)
+-            .headers_stream_dependency(headers_stream_dependency!(1))
++            .headers_priority(headers_priority!(1))
+             .build()
+     };
+ }
+diff --git a/src/emulate/profile/firefox/tls.rs b/src/emulate/profile/firefox/tls.rs
+index 0c4e9c4..4806cb3 100644
+--- a/src/emulate/profile/firefox/tls.rs
++++ b/src/emulate/profile/firefox/tls.rs
+@@ -247,7 +247,7 @@ impl From<FirefoxTlsConfig> for TlsOptions {
+             .delegated_credentials(val.delegated_credentials)
+             .record_size_limit(val.record_size_limit)
+             .enable_ocsp_stapling(true)
+-            .enable_ech_grease(val.enable_ech_grease)
++            .ech_grease(ech_grease_aes(val.enable_ech_grease))
+             .enable_signed_cert_timestamps(val.enable_signed_cert_timestamps)
+             .alpn_protocols([AlpnProtocol::HTTP2, AlpnProtocol::HTTP1])
+             .min_tls_version(TlsVersion::TLS_1_2)
+@@ -255,10 +255,8 @@ impl From<FirefoxTlsConfig> for TlsOptions {
+             .pre_shared_key(val.pre_shared_key)
+             .psk_skip_session_ticket(val.psk_skip_session_tickets)
+             .psk_dhe_ke(val.psk_dhe_ke)
+-            .preserve_tls13_cipher_list(true)
+-            .extension_permutation(val.extension_permutation)
+-            .aes_hw_override(true)
+-            .random_aes_hw_override(true);
++            .tls13_cipher_list(tls13_ciphers_in_wire_order(val.cipher_list))
++            .extension_permutation(val.extension_permutation);
+ 
+         if let Some(key_shares) = val.key_shares {
+             builder = builder.key_shares(key_shares)
+diff --git a/src/emulate/profile/okhttp.rs b/src/emulate/profile/okhttp.rs
+index 11342ab..7e8174a 100644
+--- a/src/emulate/profile/okhttp.rs
++++ b/src/emulate/profile/okhttp.rs
+@@ -48,15 +48,21 @@ struct OkHttpTlsConfig {
+ 
+ impl From<OkHttpTlsConfig> for TlsOptions {
+     fn from(val: OkHttpTlsConfig) -> Self {
+-        TlsOptions::builder()
++        let mut builder = TlsOptions::builder()
+             .enable_ocsp_stapling(true)
+             .curves_list(val.curves)
+             .sigalgs_list(val.sigalgs_list)
+             .cipher_list(val.cipher_list)
+             .min_tls_version(TlsVersion::TLS_1_2)
+-            .max_tls_version(TlsVersion::TLS_1_3)
+-            .aes_hw_override(true)
+-            .build()
++            .max_tls_version(TlsVersion::TLS_1_3);
++        // Older OkHttp profiles advertise only pre-TLS-1.3 cipher suites.
++        // Do not turn their absent TLS 1.3 preference into an explicit empty
++        // list: retain the backend's defaults, just as the old API did.
++        let tls13 = tls13_ciphers_in_wire_order(val.cipher_list);
++        if !tls13.is_empty() {
++            builder = builder.tls13_cipher_list(tls13);
++        }
++        builder.build()
+     }
+ }
+ 
+diff --git a/src/emulate/profile/opera/http2.rs b/src/emulate/profile/opera/http2.rs
+index 070d50a..ddc27dd 100644
+--- a/src/emulate/profile/opera/http2.rs
++++ b/src/emulate/profile/opera/http2.rs
+@@ -1,6 +1,6 @@
+-macro_rules! headers_stream_dependency {
++macro_rules! headers_priority {
+     () => {
+-        StreamDependency::new(StreamId::zero(), 255, true)
++        HeadersPriority::new(HeadersDependency::Root, 255, true)
+     };
+ }
+ 
+@@ -42,7 +42,7 @@ macro_rules! http2_options {
+             .max_header_list_size(262144)
+             .header_table_size(65536)
+             .enable_push(false)
+-            .headers_stream_dependency(headers_stream_dependency!())
++            .headers_priority(headers_priority!())
+             .headers_pseudo_order(pseudo_order!())
+             .settings_order(settings_order!())
+             .build()
+diff --git a/src/emulate/profile/opera/tls.rs b/src/emulate/profile/opera/tls.rs
+index 434352c..f613dbd 100644
+--- a/src/emulate/profile/opera/tls.rs
++++ b/src/emulate/profile/opera/tls.rs
+@@ -83,14 +83,14 @@ impl From<OperaTlsConfig> for TlsOptions {
+             .curves_list(val.curves)
+             .sigalgs_list(val.sigalgs_list)
+             .cipher_list(val.cipher_list)
++            .tls13_cipher_list(tls13_ciphers_in_wire_order(val.cipher_list))
+             .min_tls_version(TlsVersion::TLS_1_2)
+             .max_tls_version(TlsVersion::TLS_1_3)
+             .permute_extensions(val.permute_extensions)
+             .pre_shared_key(val.pre_shared_key)
+-            .enable_ech_grease(val.enable_ech_grease)
++            .ech_grease(ech_grease_aes(val.enable_ech_grease))
+             .alps_protocols([val.alps_protos])
+             .alps_use_new_codepoint(val.alps_use_new_codepoint)
+-            .aes_hw_override(true)
+             .certificate_compressors(CERTIFICATE_COMPRESSORS)
+             .build()
+     }
+diff --git a/src/emulate/profile/safari/tls.rs b/src/emulate/profile/safari/tls.rs
+index a412a8d..0439bbc 100644
+--- a/src/emulate/profile/safari/tls.rs
++++ b/src/emulate/profile/safari/tls.rs
+@@ -160,18 +160,20 @@ pub struct SafariTlsConfig {
+ 
+ impl From<SafariTlsConfig> for TlsOptions {
+     fn from(val: SafariTlsConfig) -> Self {
+-        TlsOptions::builder()
++        let mut builder = TlsOptions::builder()
+             .session_ticket(false)
+             .grease_enabled(true)
+             .enable_ocsp_stapling(true)
+             .enable_signed_cert_timestamps(true)
+-            .preserve_tls13_cipher_list(val.preserve_tls13_cipher_list)
+             .curves_list(val.curves)
+             .sigalgs_list(val.sigalgs_list)
+             .cipher_list(val.cipher_list)
+             .min_tls_version(val.min_tls_version)
+             .max_tls_version(val.max_tls_version)
+-            .certificate_compressors(CERTIFICATE_COMPRESSORS)
+-            .build()
++            .certificate_compressors(CERTIFICATE_COMPRESSORS);
++        if val.preserve_tls13_cipher_list == Some(true) {
++            builder = builder.tls13_cipher_list(tls13_ciphers_in_wire_order(val.cipher_list));
++        }
++        builder.build()
+     }
+ }
+diff --git a/tests/profile_wire_compat.rs b/tests/profile_wire_compat.rs
+new file mode 100644
+index 0000000..8b8f517
+--- /dev/null
++++ b/tests/profile_wire_compat.rs
+@@ -0,0 +1,132 @@
++//! Offline checks that browser profiles survive Wreq's new priority and TLS APIs.
++
++use wreq::{
++    IntoEmulation,
++    http2::{HeadersDependency, HeadersPriority},
++    tls::{EchGrease, EchGreaseAead, Tls13Cipher},
++};
++use wreq_util::{Emulation, Platform, Profile};
++
++#[test]
++fn chrome149_headers_priority_uses_root_exclusive_weight_255() {
++    let options = Profile::Chrome149
++        .into_emulation()
++        .http2_options
++        .expect("Chrome HTTP/2 profile");
++    assert_eq!(
++        options.headers_priority,
++        Some(HeadersPriority::new(HeadersDependency::Root, 255, true))
++    );
++}
++
++#[test]
++fn firefox109_uses_declared_parent_13_with_preface_priority_tree() {
++    let options = Profile::Firefox109
++        .into_emulation()
++        .http2_options
++        .expect("Firefox HTTP/2 profile");
++    assert_eq!(options.initial_stream_id, Some(15));
++    assert_eq!(
++        options.headers_priority,
++        Some(HeadersPriority::new(
++            HeadersDependency::Declared(13_u32.into()),
++            41,
++            false,
++        ))
++    );
++    assert!(options.priorities.is_some());
++}
++
++#[test]
++fn firefox135_explicit_tls13_order_and_ech_aead() {
++    let options = Profile::Firefox135
++        .into_emulation()
++        .tls_options
++        .expect("Firefox TLS profile");
++    assert_eq!(
++        options.tls13_cipher_list.as_deref(),
++        Some(
++            [
++                Tls13Cipher::AES_128_GCM_SHA256,
++                Tls13Cipher::CHACHA20_POLY1305_SHA256,
++                Tls13Cipher::AES_256_GCM_SHA384,
++            ]
++            .as_slice()
++        )
++    );
++    assert_eq!(
++        options.ech_grease,
++        Some(EchGrease::Aead(EchGreaseAead::AES_128_GCM))
++    );
++}
++
++#[test]
++fn safari_ios18_preserves_distinct_platform_and_cipher_settings() {
++    let native = Emulation::builder()
++        .profile(Profile::SafariIos18_1_1)
++        .platform(Platform::IOS)
++        .headers(false)
++        .build()
++        .into_emulation();
++    assert!(native.tls_options.is_some());
++    assert!(native.http2_options.is_some());
++    assert!(native.headers.is_empty());
++}
++
++#[test]
++fn okhttp39_without_tls13_suites_keeps_backend_default() {
++    let options = Profile::OkHttp3_9
++        .into_emulation()
++        .tls_options
++        .expect("OkHttp TLS profile");
++    assert_eq!(options.tls13_cipher_list, None);
++    assert!(
++        options
++            .cipher_list
++            .as_deref()
++            .unwrap()
++            .contains("TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256")
++    );
++}
++
++#[test]
++fn okhttp313_preserves_supported_explicit_tls13_order() {
++    let options = Profile::OkHttp3_13
++        .into_emulation()
++        .tls_options
++        .expect("OkHttp TLS profile");
++    assert_eq!(
++        options.tls13_cipher_list.as_deref(),
++        Some(
++            [
++                Tls13Cipher::AES_128_GCM_SHA256,
++                Tls13Cipher::AES_256_GCM_SHA384,
++                Tls13Cipher::CHACHA20_POLY1305_SHA256,
++            ]
++            .as_slice()
++        )
++    );
++}
++
++#[test]
++fn no_browser_profile_explicitly_sets_an_empty_tls13_cipher_list() {
++    // The old combined TLS cipher strings may contain only pre-TLS-1.3
++    // suites. In that case leave the backend's normal TLS 1.3 defaults
++    // intact rather than explicitly asking BoringSSL to reset the list.
++    for &profile in Profile::VARIANTS {
++        let options = Emulation::builder()
++            .profile(profile)
++            .headers(false)
++            .build()
++            .into_emulation()
++            .tls_options
++            .expect("every browser profile supplies TLS options");
++        assert!(
++            options
++                .tls13_cipher_list
++                .as_deref()
++                .is_none_or(|list| !list.is_empty()),
++            "profile {profile:?} supplied an explicit empty TLS 1.3 cipher list"
++        );
++    }
++}
