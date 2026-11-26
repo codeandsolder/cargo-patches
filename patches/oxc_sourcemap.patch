@@ -27,10 +27,10 @@ index 4738f3b..2f8bede 100644
  napi = { version = "3", optional = true }
  napi-derive = { version = "3", optional = true }
 diff --git a/src/lib.rs b/src/lib.rs
-index 506dc1d..08e1e45 100644
+index 506dc1d..16cea41 100644
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -22,3 +22,29 @@ pub use sourcemap::{SourceMap, SourceMapParts};
+@@ -22,3 +22,31 @@ pub use sourcemap::{SourceMap, SourceMapParts};
  pub use sourcemap_builder::SourceMapBuilder;
  pub use sourcemap_visualizer::SourcemapVisualizer;
  pub use token::{SourceViewToken, Token, TokenChunk};
@@ -43,7 +43,8 @@ index 506dc1d..08e1e45 100644
 +    output.push_str(prefix);
 +    #[cfg(any(
 +        target_arch = "x86_64",
-+        all(target_arch = "aarch64", target_feature = "neon")
++        all(target_arch = "aarch64", target_feature = "neon"),
++        all(target_arch = "wasm32", target_feature = "simd128")
 +    ))]
 +    {
 +        static ENGINE: std::sync::LazyLock<base64::engine::Simd> = std::sync::LazyLock::new(|| {
@@ -53,7 +54,8 @@ index 506dc1d..08e1e45 100644
 +    }
 +    #[cfg(not(any(
 +        target_arch = "x86_64",
-+        all(target_arch = "aarch64", target_feature = "neon")
++        all(target_arch = "aarch64", target_feature = "neon"),
++        all(target_arch = "wasm32", target_feature = "simd128")
 +    )))]
 +    {
 +        base64::engine::general_purpose::STANDARD.encode_string(input, &mut output);
