@@ -1,0 +1,17 @@
+{
+  "family": "wayland-modernization",
+  "packages": [
+    {
+      "name": "winit",
+      "version": "0.30.13",
+      "checksum": "a6755fa58a9f8350bd1e472d4c3fcc25f824ec358933bba33306d0b63df5978d",
+      "patch": "patches/winit.patch"
+    },
+    {
+      "name": "wayland-backend",
+      "version": "0.3.17",
+      "checksum": "38a91b4eaddff87b1cd1074985e3713da4af2c49742d1b356b2c01670a67a078",
+      "patch": "patches/wayland-backend.patch"
+    }
+  ]
+}
