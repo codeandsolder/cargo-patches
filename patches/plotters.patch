@@ -1,0 +1,193 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 530924a..d23b965 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -252,7 +252,7 @@ surface_series = []
+ svg_backend = ["plotters-svg"]
+ ttf = [
+     "font-kit",
+-    "ttf-parser",
++    "read-fonts",
+     "lazy_static",
+     "pathfinder_geometry",
+ ]
+@@ -306,8 +306,8 @@ optional = true
+ version = "0.5.1"
+ optional = true
+ 
+-[target.'cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))'.dependencies.ttf-parser]
+-version = "0.20.0"
++[target.'cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))'.dependencies.read-fonts]
++version = "0.46.0"
+ optional = true
+ 
+ [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies.rand]
+diff --git a/Cargo.toml.orig b/Cargo.toml.orig
+index 35a298a..f1f5807 100644
+--- a/Cargo.toml.orig
++++ b/Cargo.toml.orig
+@@ -37,7 +37,7 @@ optional = true
+ path = "../plotters-svg"
+ 
+ [target.'cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))'.dependencies]
+-ttf-parser = { version = "0.20.0", optional = true }
++read-fonts = { version = "0.46.0", optional = true }
+ lazy_static = { version = "1.4.0", optional = true }
+ pathfinder_geometry = { version = "0.5.1", optional = true }
+ font-kit = { version = "0.14.2", optional = true }
+@@ -104,7 +104,7 @@ point_series = []
+ surface_series = []
+ 
+ # Font implementation
+-ttf = ["font-kit", "ttf-parser", "lazy_static", "pathfinder_geometry"]
++ttf = ["font-kit", "read-fonts", "lazy_static", "pathfinder_geometry"]
+ # dlopen fontconfig C library at runtime instead of linking at build time
+ # Can be useful for cross compiling, especially considering fontconfig has lots of C dependencies
+ fontconfig-dlopen = ["font-kit/source-fontconfig-dlopen"]
+diff --git a/src/style/font/ttf.rs b/src/style/font/ttf.rs
+index 5d5a720..6bf591d 100644
+--- a/src/style/font/ttf.rs
++++ b/src/style/font/ttf.rs
+@@ -16,7 +16,11 @@ use font_kit::{
+     source::SystemSource,
+ };
+ 
+-use ttf_parser::{Face, GlyphId};
++use read_fonts::{
++    tables::kern::{Kern, SubtableKind},
++    types::GlyphId,
++    FontData as TableData, FontRead,
++};
+ 
+ use pathfinder_geometry::transform2d::Transform2F;
+ use pathfinder_geometry::vector::{Vector2F, Vector2I};
+@@ -63,45 +67,40 @@ const PLACEHOLDER_CHAR: char = '�';
+ #[derive(Clone)]
+ struct FontExt {
+     inner: Font,
+-    face: Option<Face<'static>>,
+-}
+-
+-impl Drop for FontExt {
+-    fn drop(&mut self) {
+-        // We should make sure the face object dead first
+-        self.face.take();
+-    }
++    kern_data: Option<Arc<[u8]>>,
+ }
+ 
+ impl FontExt {
+     fn new(font: Font) -> Self {
+-        let handle = font.handle();
+-        let (data, idx) = match handle.as_ref() {
+-            Some(Handle::Memory { bytes, font_index }) => (&bytes[..], *font_index),
+-            _ => unreachable!(),
+-        };
+-        let face = unsafe {
+-            std::mem::transmute::<Option<_>, Option<Face<'static>>>(
+-                ttf_parser::Face::parse(data, idx).ok(),
+-            )
+-        };
+-        Self { inner: font, face }
++        // Font-kit selects the correct face, including within font collections.
++        // Own the table bytes instead of extending a borrowed Face to 'static.
++        let kern_data = font
++            .load_font_table(u32::from_be_bytes(*b"kern"))
++            .map(Arc::from);
++        Self {
++            inner: font,
++            kern_data,
++        }
+     }
+ 
+-    fn query_kerning_table(&self, prev: u32, next: u32) -> f32 {
+-        if let Some(face) = self.face.as_ref() {
+-            if let Some(kern) = face.tables().kern {
+-                let kern = kern
+-                    .subtables
+-                    .into_iter()
+-                    .filter(|st| st.horizontal && !st.variable)
+-                    .filter_map(|st| st.glyphs_kerning(GlyphId(prev as u16), GlyphId(next as u16)))
+-                    .next()
+-                    .unwrap_or(0);
+-                return kern as f32;
+-            }
+-        }
+-        0.0
++    fn kerning_table(&self) -> Option<Kern<'_>> {
++        Kern::read(TableData::new(self.kern_data.as_deref()?)).ok()
++    }
++
++    fn query_kerning_table(kern: Option<&Kern<'_>>, prev: u32, next: u32) -> f32 {
++        let (left, right) = (GlyphId::new(prev), GlyphId::new(next));
++        kern.into_iter()
++            .flat_map(Kern::subtables)
++            .filter_map(Result::ok)
++            .filter(|st| st.is_horizontal() && !st.is_variable())
++            .filter_map(|st| match st.kind().ok()? {
++                SubtableKind::Format0(table) => table.kerning(left, right),
++                SubtableKind::Format2(table) => table.kerning(left, right),
++                SubtableKind::Format3(table) => table.kerning(left, right),
++                SubtableKind::Format1(_) => None,
++            })
++            .next()
++            .unwrap_or(0) as f32
+     }
+ }
+ 
+@@ -213,6 +212,7 @@ impl FontData for FontDataInternal {
+ 
+         let mut x_in_unit = 0f32;
+ 
++        let kern = font.kerning_table();
+         let mut prev = None;
+         let place_holder = font.glyph_for_char(PLACEHOLDER_CHAR);
+ 
+@@ -222,7 +222,7 @@ impl FontData for FontDataInternal {
+                     x_in_unit += size.x();
+                 }
+                 if let Some(pc) = prev {
+-                    x_in_unit += font.query_kerning_table(pc, glyph_id);
++                    x_in_unit += FontExt::query_kerning_table(kern.as_ref(), pc, glyph_id);
+                 }
+                 prev = Some(glyph_id);
+             }
+@@ -250,6 +250,7 @@ impl FontData for FontDataInternal {
+ 
+         base_y -= (0.24 * em) as i32;
+ 
++        let kern = font.kerning_table();
+         let mut prev = None;
+         let place_holder = font.glyph_for_char(PLACEHOLDER_CHAR);
+ 
+@@ -258,7 +259,8 @@ impl FontData for FontDataInternal {
+         for c in text.chars() {
+             if let Some(glyph_id) = font.glyph_for_char(c).or(place_holder) {
+                 if let Some(pc) = prev {
+-                    x += font.query_kerning_table(pc, glyph_id) * em / metrics.units_per_em as f32;
++                    x += FontExt::query_kerning_table(kern.as_ref(), pc, glyph_id) * em
++                        / metrics.units_per_em as f32;
+                 }
+ 
+                 let mut canvas = Canvas::new(Vector2I::splat(canvas_size as i32), Format::A8);
+@@ -302,6 +304,20 @@ mod test {
+ 
+     use super::*;
+ 
++    #[test]
++    fn horizontal_pair_kerning() {
++        let data = [
++            0, 0, 0, 1, // version and one subtable
++            0, 0, 0, 20, 0, 1, // format zero, horizontal
++            0, 1, 0, 6, 0, 0, 0, 0, // one pair and search fields
++            0, 1, 0, 2, 0xff, 0xc0,
++        ];
++        let kern = Kern::read(TableData::new(&data)).unwrap();
++        assert_eq!(FontExt::query_kerning_table(Some(&kern), 1, 2), -64.0);
++        assert_eq!(FontExt::query_kerning_table(Some(&kern), 2, 1), 0.0);
++        assert_eq!(FontExt::query_kerning_table(None, 1, 2), 0.0);
++    }
++
+     #[test]
+     fn test_font_cache() -> FontResult<()> {
+         // We cannot only check the size of font cache, because

@@ -117,5 +117,19 @@
       "checksum": "417bef24afe1460300965a25ff4a24b8b45ad011948302ec221e8a0a81eb2c79",
       "patch": "patches/cow-utils.patch"
     }
+  ],
+  "quiche-maintenance": [
+    {
+      "name": "sliceslice",
+      "version": "0.4.3",
+      "checksum": "361b80c452f3f8cc2426bf996059740b4c78ef5a5aeb1c1852d8ac4f561b8b4c",
+      "patch": "patches/sliceslice.patch"
+    },
+    {
+      "name": "plotters",
+      "version": "0.3.7",
+      "checksum": "5aeb6f403d7a4911efb1e33402027fc44f29b5bf6def3effcc22d7bb75f2b747",
+      "patch": "patches/plotters.patch"
+    }
   ]
 }

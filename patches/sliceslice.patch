@@ -1,0 +1,82 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 7689ba0..016c85c 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -38,8 +38,8 @@ version = "1"
+ [dependencies.memchr]
+ version = "2.3"
+ 
+-[dependencies.paste]
+-version = "1"
++[dependencies.pastey]
++version = "0.2.3"
+ 
+ [dependencies.seq-macro]
+ version = "0.3"
+diff --git a/Cargo.toml.orig b/Cargo.toml.orig
+index 504aa74..bca3766 100644
+--- a/Cargo.toml.orig
++++ b/Cargo.toml.orig
+@@ -11,7 +11,7 @@ keywords = ["search", "text", "string", "single", "simd"]
+ 
+ [dependencies]
+ cfg-if = "1"
+-paste = "1"
++pastey = "0.2.3"
+ memchr = "2.3"
+ seq-macro = "0.3"
+ 
+diff --git a/src/multiversion.rs b/src/multiversion.rs
+index 8c18226..0d88bfb 100644
+--- a/src/multiversion.rs
++++ b/src/multiversion.rs
+@@ -1,6 +1,6 @@
+ macro_rules! multiversion {
+     ($vis:vis unsafe fn $name:ident $(<$($gen_name:ident : $gen_ty:ty),+>)? ( $($arg_name:ident : $arg_ty:ty ,)+ ) -> $ret:ty $block:block) => {
+-        paste::paste! {
++        pastey::paste! {
+             #[allow(dead_code)]
+             #[inline(always)]
+             $vis unsafe fn [<$name _ default_version>] $(<$($gen_name : $gen_ty),+>)? ( $($arg_name : $arg_ty),+ ) -> $ret {
+@@ -49,8 +49,8 @@ cfg_if::cfg_if! {
+         macro_rules! dispatch {
+             ($target:ident => $name:ident ( $($arg:expr),+ )) => {
+                 match $target {
+-                    crate::multiversion::Target::Default => paste::paste! { [<$name _ default_version>] ( $($arg),+ ) },
+-                    crate::multiversion::Target::Avx2 => paste::paste! { [<$name _ avx2_version>] ( $($arg),+ ) },
++                    crate::multiversion::Target::Default => pastey::paste! { [<$name _ default_version>] ( $($arg),+ ) },
++                    crate::multiversion::Target::Avx2 => pastey::paste! { [<$name _ avx2_version>] ( $($arg),+ ) },
+                 }
+             }
+         }
+@@ -63,8 +63,8 @@ cfg_if::cfg_if! {
+         macro_rules! dispatch {
+             ($target:ident => $name:ident ( $($arg:expr),+ )) => {
+                 match $target {
+-                    crate::multiversion::Target::Default => paste::paste! { [<$name _ default_version>] ( $($arg),+ ) },
+-                    crate::multiversion::Target::Simd128 => paste::paste! { [<$name _ simd128_version>] ( $($arg),+ ) },
++                    crate::multiversion::Target::Default => pastey::paste! { [<$name _ default_version>] ( $($arg),+ ) },
++                    crate::multiversion::Target::Simd128 => pastey::paste! { [<$name _ simd128_version>] ( $($arg),+ ) },
+                 }
+             }
+         }
+@@ -77,8 +77,8 @@ cfg_if::cfg_if! {
+         macro_rules! dispatch {
+             ($target:ident => $name:ident ( $($arg:expr),+ )) => {
+                 match $target {
+-                    crate::multiversion::Target::Default => paste::paste! { [<$name _ default_version>] ( $($arg),+ ) },
+-                    crate::multiversion::Target::Neon => paste::paste! { [<$name _ neon_version>] ( $($arg),+ ) },
++                    crate::multiversion::Target::Default => pastey::paste! { [<$name _ default_version>] ( $($arg),+ ) },
++                    crate::multiversion::Target::Neon => pastey::paste! { [<$name _ neon_version>] ( $($arg),+ ) },
+                 }
+             }
+         }
+@@ -89,7 +89,7 @@ cfg_if::cfg_if! {
+ 
+         macro_rules! dispatch {
+             ($target:ident => $name:ident ( $($arg:expr),+ )) => {
+-                paste::paste! { [<$name _ default_version>] ( $($arg),+ ) },
++                pastey::paste! { [<$name _ default_version>] ( $($arg),+ ) },
+             }
+         }
+     }
