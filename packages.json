@@ -61,5 +61,61 @@
         }
       ]
     }
+  ],
+  "nix-alignment": [
+    {
+      "name": "fuser",
+      "version": "0.19.0",
+      "checksum": "94a147f6d231dc1eddfe6e2ad35d6c3676a5bd6776d3975c8703ea4679f90cc3",
+      "patch": "patches/fuser.patch"
+    }
+  ],
+  "sha2-alignment": [
+    {
+      "name": "lzma-rust2",
+      "version": "0.15.8",
+      "checksum": "e20f57f9918e5bd7bc58c22cdd70a6afc7375d4dd9683af5f2b34bd3d2bba619",
+      "patch": "patches/lzma-rust2.patch"
+    },
+    {
+      "name": "wasm_split_macros",
+      "version": "0.2.2",
+      "checksum": "3e653af7ee4a9ef0fce481a9ec6f43cb78de20d0cdb4f4f5862e1dc6e407e6c8",
+      "patch": "patches/wasm_split_macros.patch"
+    }
+  ],
+  "leptos-base64": [
+    {
+      "name": "leptos",
+      "version": "0.8.23",
+      "checksum": "4b0f9f061ff585050a77e18b93a58d6c881c6785f473fc98924c4f77da50d891",
+      "patch": "patches/leptos.patch"
+    },
+    {
+      "name": "leptos_server",
+      "version": "0.8.8",
+      "checksum": "202b2d1261c22d886f307934760a6bb566444f68f39b24f6f10defdc23633049",
+      "patch": "patches/leptos_server.patch"
+    },
+    {
+      "name": "server_fn",
+      "version": "0.8.13",
+      "checksum": "be8559dd05af1b5b7e363a150616589d5a88af5187273f7f331ba0dae8922812",
+      "patch": "patches/server_fn.patch"
+    }
+  ],
+  "opendal-alignment": [
+    {
+      "name": "opendal-core",
+      "version": "0.59.5",
+      "checksum": "33d5a635dfea36a7a0c3bbb2ca34c97af17f98dd69b0cdf31a1d436a346e0a12",
+      "patch": "patches/opendal-core.patch"
+    },
+    {
+      "name": "opendal-service-redis",
+      "version": "0.59.5",
+      "checksum": "e58a60a615e6fdce2788b65d57f7584ef6b9da23145f70482ad47fcceb5d12b2",
+      "patch": "patches/opendal-service-redis.patch"
+    }
   ]
 }

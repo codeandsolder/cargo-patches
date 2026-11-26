@@ -1,0 +1,71 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index d9114b5..cdfb33a 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -57,7 +57,7 @@ version = "1.0.100"
+ features = ["std"]
+ 
+ [dependencies.asyncband]
+-version = "0.7.1"
++version = "0.8"
+ features = [
+     "mutex",
+     "once-cell",
+@@ -81,7 +81,7 @@ default-features = false
+ version = "1.4"
+ 
+ [dependencies.jiff]
+-version = "0.2.28"
++version = "1"
+ features = ["serde"]
+ 
+ [dependencies.log]
+@@ -160,7 +160,7 @@ default-features = false
+ version = "1.1.0"
+ 
+ [target.'cfg(target_arch = "wasm32")'.dependencies.jiff]
+-version = "0.2.28"
++version = "1"
+ features = [
+     "serde",
+     "js",
+diff --git a/src/raw/time.rs b/src/raw/time.rs
+index 4ff95f4..e82ad8b 100644
+--- a/src/raw/time.rs
++++ b/src/raw/time.rs
+@@ -182,14 +182,14 @@ impl From<Timestamp> for SystemTime {
+     fn from(ts: Timestamp) -> Self {
+         #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+         {
+-            SystemTime::from(ts.0)
++            SystemTime::try_from(ts.0).expect("timestamp outside SystemTime range")
+         }
+ 
+         #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+         {
+             use std::time::SystemTime as StdSystemTime;
+ 
+-            let t = StdSystemTime::from(ts.0);
++            let t = StdSystemTime::try_from(ts.0).expect("timestamp outside SystemTime range");
+             <web_time::SystemTime as web_time::web::SystemTimeExt>::from_std(t)
+         }
+     }
+@@ -316,3 +316,18 @@ mod tests {
+         assert!(signed_duration_to_duration(SignedDuration::from_secs(-1)).is_err());
+     }
+ }
++
++#[cfg(test)]
++#[test]
++fn system_time_conversion_preserves_fraction_and_pre_epoch() {
++    for ms in [-1234_i64, -1, 0, 1, 1234] {
++        let expected = if ms < 0 {
++            UNIX_EPOCH - Duration::from_millis(ms.unsigned_abs())
++        } else {
++            UNIX_EPOCH + Duration::from_millis(ms.unsigned_abs())
++        };
++        let timestamp = Timestamp::from_millisecond(ms).unwrap();
++        assert_eq!(SystemTime::from(timestamp), expected);
++        assert_eq!(Timestamp::try_from(expected).unwrap(), timestamp);
++    }
++}

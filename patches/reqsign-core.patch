@@ -1,5 +1,5 @@
 diff --git a/Cargo.toml b/Cargo.toml
-index 94cd1c9..d737eed 100644
+index 94cd1c9..0b15c48 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
 @@ -11,7 +11,7 @@
@@ -21,7 +21,13 @@ index 94cd1c9..d737eed 100644
      "dep:serde",
      "dep:serde_json",
  ]
-@@ -71,15 +72,16 @@ version = "0.2"
+@@ -66,20 +67,21 @@ version = "0.13"
+ version = "1"
+ 
+ [dependencies.jiff]
+-version = "0.2"
++version = "1"
+ 
  [dependencies.log]
  version = "0.4"
  
@@ -236,6 +242,43 @@ index 413ff8f..d4dafd4 100644
 +        assert!(parse_rsa_private_key(trailing.as_bytes()).is_err());
 +    }
  }
+diff --git a/src/time.rs b/src/time.rs
+index d538aa5..d04bdb9 100644
+--- a/src/time.rs
++++ b/src/time.rs
+@@ -107,8 +107,11 @@ impl Timestamp {
+     }
+ 
+     /// Convert to `SystemTime`.
++    ///
++    /// # Panics
++    /// The timestamp is outside the platform SystemTime range.
+     pub fn as_system_time(self) -> SystemTime {
+-        SystemTime::from(self.0)
++        SystemTime::try_from(self.0).expect("timestamp outside SystemTime range")
+     }
+ 
+     /// Creates a new instant in time from the number of milliseconds elapsed
+@@ -255,3 +258,19 @@ mod tests {
+         }
+     }
+ }
++
++#[cfg(test)]
++#[test]
++fn system_time_conversion_preserves_fraction_and_pre_epoch() {
++    for ms in [-1234_i64, -1, 0, 1, 1234] {
++        let expected = if ms < 0 {
++            SystemTime::UNIX_EPOCH - Duration::from_millis(ms.unsigned_abs())
++        } else {
++            SystemTime::UNIX_EPOCH + Duration::from_millis(ms.unsigned_abs())
++        };
++        assert_eq!(
++            Timestamp::from_millisecond(ms).unwrap().as_system_time(),
++            expected
++        );
++    }
++}
 diff --git a/tests/fixtures/rs256-openssl-signature.hex b/tests/fixtures/rs256-openssl-signature.hex
 new file mode 100644
 index 0000000..ed30727

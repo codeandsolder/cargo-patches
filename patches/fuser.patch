@@ -1,0 +1,13 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 8488140..945f875 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -118,7 +118,7 @@ version = "0.4.6"
+ version = "2.7.2"
+ 
+ [dependencies.nix]
+-version = "0.31.0"
++version = "0.32"
+ features = [
+     "fs",
+     "user",

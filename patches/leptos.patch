@@ -1,0 +1,13 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 5ad1215..19114c1 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -193,7 +193,7 @@ features = [
+ ]
+ 
+ [dependencies.base64]
+-version = "0.22"
++version = "0.23"
+ optional = true
+ default-features = true
+ 

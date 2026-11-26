@@ -1,0 +1,22 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 98db9c2..a06d390 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -11,7 +11,7 @@
+ 
+ [package]
+ edition = "2021"
+-rust-version = "1.82"
++rust-version = "1.88"
+ name = "lzma-rust2"
+ version = "0.15.8"
+ build = false
+@@ -175,7 +175,7 @@ path = "benches/comparison.rs"
+ harness = false
+ 
+ [dependencies.sha2]
+-version = "0.10"
++version = "0.11"
+ optional = true
+ 
+ [dev-dependencies.criterion]

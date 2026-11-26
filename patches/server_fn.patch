@@ -1,0 +1,13 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 5c23474..0127452 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -235,7 +235,7 @@ optional = true
+ default-features = false
+ 
+ [dependencies.base64]
+-version = "0.22"
++version = "0.23"
+ default-features = true
+ 
+ [dependencies.bitcode]
