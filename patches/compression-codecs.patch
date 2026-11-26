@@ -1,0 +1,26 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 4ef6497..541203a 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -116,6 +116,8 @@ optional = true
+ [dependencies.flate2]
+ version = "1.1.4"
+ optional = true
++default-features = false
++features = ["zlib-rs"]
+ 
+ [dependencies.liblzma]
+ version = "0.4.5"
+diff --git a/Cargo.toml.orig b/Cargo.toml.orig
+index 57ca026..1ce5e3d 100644
+--- a/Cargo.toml.orig
++++ b/Cargo.toml.orig
+@@ -57,7 +57,7 @@ compression-core.workspace = true
+ brotli = { version = "9", optional = true }
+ bzip2 = { version = "0.6.1", optional = true }
+ deflate64 = { version = "0.1.10", optional = true }
+-flate2 = { version = "1.1.4", optional = true }
++flate2 = { version = "1.1.4", optional = true, default-features = false, features = ["zlib-rs"] }
+ libzstd = { package = "zstd", version = "0.14.0", optional = true, default-features = false }
+ lz4 = { version = "1.28.1", optional = true }
+ liblzma = { version = "0.4.5", optional = true }

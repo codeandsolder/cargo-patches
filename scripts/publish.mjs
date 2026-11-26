@@ -11,6 +11,7 @@ const git = (cwd, ...args) => run(cwd, 'git', args);
 const die = (message) => { throw new Error(message); };
 const sha = /^[0-9a-f]{40}$/;
 const namePattern = /^[a-z][a-z0-9-]*$/;
+const packageNamePattern = /^[a-z][a-z0-9_-]*$/;
 const mode = process.argv[2];
 if (!['--check', '--publish'].includes(mode) || process.argv.length !== 3) die('Usage: node scripts/publish.mjs --check|--publish');
 const config = JSON.parse(readFileSync(join(root, 'packages.json'), 'utf8'));
@@ -43,7 +44,7 @@ try {
     for (const entry of readdirSync(staging)) if (entry !== '.git') rmSync(join(staging, entry), {recursive: true, force: true});
     const names = new Set();
     for (const pkg of packages) {
-      if (!namePattern.test(pkg.name) || names.has(pkg.name) || pkg.patch !== 'patches/' + pkg.name + '.patch') die('Invalid package: ' + JSON.stringify(pkg));
+      if (!packageNamePattern.test(pkg.name) || names.has(pkg.name) || pkg.patch !== 'patches/' + pkg.name + '.patch') die('Invalid package: ' + JSON.stringify(pkg));
       names.add(pkg.name);
       const source = join(scratch, 'source-' + family + '-' + pkg.name);
       mkdirSync(source);

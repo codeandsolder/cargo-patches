@@ -35,5 +35,39 @@
       "checksum": "a953ad510f5c2ead708c8e5ed37df7dec7eb41198bbb6d7fb1d71174851e3511",
       "patch": "patches/surrealdb-diskann.patch"
     }
+  ],
+  "js-redox-deps": [
+    {
+      "name": "oxc_sourcemap",
+      "version": "10.0.0",
+      "checksum": "1ca9998ccb8eabb05099c5827ce983cca9f5dfc008c6c47d7dcc034cee301e91",
+      "patch": "patches/oxc_sourcemap.patch"
+    },
+    {
+      "name": "petgraph",
+      "version": "0.8.3",
+      "checksum": "8701b58ea97060d5e5b155d383a69952a60943f0e6dfe30b04c287beb0b27455",
+      "patch": "patches/petgraph.patch"
+    },
+    {
+      "name": "phf_macros",
+      "version": "0.14.0",
+      "checksum": "5fa8d0ca26d424d27630da600c6624696e7dec8bf7b3b492b383c5dc49e5e085",
+      "patch": "patches/phf_macros.patch"
+    },
+    {
+      "name": "compact_str",
+      "version": "0.10.0",
+      "checksum": "79fcda08c33bb58b97008b2cdada6622500e949e060f5913361763121abd2416",
+      "patch": "patches/compact_str.patch"
+    }
+  ],
+  "compression-backend": [
+    {
+      "name": "compression-codecs",
+      "version": "0.4.47",
+      "checksum": "84f840cff84d10085260e460023934d0af699e71212b09b2a41452e8bd9cda43",
+      "patch": "patches/compression-codecs.patch"
+    }
   ]
 }

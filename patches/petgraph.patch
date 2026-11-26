@@ -1,0 +1,26 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 8a33ce1..2fda4e9 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -316,7 +316,7 @@ version = "0.5.7"
+ default-features = false
+ 
+ [dependencies.hashbrown]
+-version = "^0.15.0"
++version = "0.17"
+ features = [
+     "default-hasher",
+     "inline-more",
+diff --git a/Cargo.toml.orig b/Cargo.toml.orig
+index b5ea58e..8fae57c 100644
+--- a/Cargo.toml.orig
++++ b/Cargo.toml.orig
+@@ -43,7 +43,7 @@ debug = true
+ [dependencies]
+ fixedbitset = { version = "0.5.7", default-features = false }
+ indexmap = { version = "2.5.0", default-features = false }
+-hashbrown = { version = "^0.15.0", default-features = false, features = ["default-hasher", "inline-more"] }
++hashbrown = { version = "0.17", default-features = false, features = ["default-hasher", "inline-more"] }
+ quickcheck = { optional = true, version = "0.8", default-features = false }
+ serde = { version = "1.0", default-features = false, optional = true }
+ serde_derive = { version = "1.0", default-features = false, optional = true }
