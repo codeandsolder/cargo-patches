@@ -101,5 +101,13 @@
       "checksum": "456720daa870e4f69f8d29fded1c8deea82da4780a6b8553baa160eb0cd8d864",
       "patch": "patches/oxc-browserslist.patch"
     }
+  ],
+  "openssl-macros": [
+    {
+      "name": "openssl-macros",
+      "version": "0.1.1",
+      "checksum": "a948666b637a0f465e8564c73e89d4dde00d72d4d473cc972f390fc3dcee7d9c",
+      "patch": "patches/openssl-macros.patch"
+    }
   ]
 }
