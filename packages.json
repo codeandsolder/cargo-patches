@@ -175,5 +175,13 @@
       "checksum": "adc43a60c217b0c6ff46e47f26911015ad8d2e5a8be1af668c67e370d99a4346",
       "patch": "patches/nalgebra.patch"
     }
+  ],
+  "base64": [
+    {
+      "name": "base64",
+      "version": "0.23.1",
+      "checksum": "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5",
+      "patch": "patches/base64.patch"
+    }
   ]
 }
