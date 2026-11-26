@@ -1,0 +1,75 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -237,7 +237,7 @@
+ default-features = false
+ 
+ [target.'cfg(all(unix, not(any(target_os = "redox", target_family = "wasm", target_os = "android", target_os = "ios", target_os = "macos"))))'.dependencies.calloop]
+-version = "0.13.0"
++version = "0.14.5"
+ 
+ [target.'cfg(all(unix, not(any(target_os = "redox", target_family = "wasm", target_os = "android", target_os = "ios", target_os = "macos"))))'.dependencies.libc]
+ version = "0.2.64"
+@@ -251,7 +251,7 @@
+ optional = true
+ 
+ [target.'cfg(all(unix, not(any(target_os = "redox", target_family = "wasm", target_os = "android", target_os = "ios", target_os = "macos"))))'.dependencies.rustix]
+-version = "0.38.4"
++version = "1.1.6"
+ features = [
+     "std",
+     "system",
+@@ -261,14 +261,14 @@
+ default-features = false
+ 
+ [target.'cfg(all(unix, not(any(target_os = "redox", target_family = "wasm", target_os = "android", target_os = "ios", target_os = "macos"))))'.dependencies.sctk]
+-version = "0.19.2"
++version = "0.20.0"
+ features = ["calloop"]
+ optional = true
+ default-features = false
+ package = "smithay-client-toolkit"
+ 
+ [target.'cfg(all(unix, not(any(target_os = "redox", target_family = "wasm", target_os = "android", target_os = "ios", target_os = "macos"))))'.dependencies.sctk-adwaita]
+-version = "0.10.1"
++version = "0.11.1"
+ optional = true
+ default-features = false
+ 
+--- a/Cargo.toml.orig
++++ b/Cargo.toml.orig
+@@ -254,20 +254,20 @@
+ [target.'cfg(all(unix, not(any(target_os = "redox", target_family = "wasm", target_os = "android", target_os = "ios", target_os = "macos"))))'.dependencies]
+ ahash = { version = "0.8.7", features = ["no-rng"], optional = true }
+ bytemuck = { version = "1.13.1", default-features = false, optional = true }
+-calloop = "0.13.0"
++calloop = "0.14.5"
+ libc = "0.2.64"
+ memmap2 = { version = "0.9.0", optional = true }
+ percent-encoding = { version = "2.0", optional = true }
+-rustix = { version = "0.38.4", default-features = false, features = [
++rustix = { version = "1.1.6", default-features = false, features = [
+     "std",
+     "system",
+     "thread",
+     "process",
+ ] }
+-sctk = { package = "smithay-client-toolkit", version = "0.19.2", default-features = false, features = [
++sctk = { package = "smithay-client-toolkit", version = "0.20.0", default-features = false, features = [
+     "calloop",
+ ], optional = true }
+-sctk-adwaita = { version = "0.10.1", default-features = false, optional = true }
++sctk-adwaita = { version = "0.11.1", default-features = false, optional = true }
+ wayland-backend = { version = "0.3.10", default-features = false, features = [
+     "client_system",
+ ], optional = true }
+--- a/src/platform_impl/linux/wayland/event_loop/mod.rs
++++ b/src/platform_impl/linux/wayland/event_loop/mod.rs
+@@ -782,7 +782,7 @@
+                         if Ok(1) == rustix::io::read(read.as_fd(), &mut [0u8; 1]) {
+                             break 'outer;
+                         }
+-                        let _ = rustix::event::poll(&mut [poll_fd, pipe_poll_fd], -1);
++                        let _ = rustix::event::poll(&mut [poll_fd, pipe_poll_fd], None);
+                         // Non-blocking read the connection.
+                         let _ = read_guard.read_without_dispatch();
+                     }
