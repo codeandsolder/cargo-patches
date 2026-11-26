@@ -120,7 +120,7 @@ version = "3.3.3"
 
 [dev-dependencies.btls]
 git = "https://github.com/codeandsolder/btls-fast.git"
-rev = "0fddfc535515622963dfb4cb658ab63dcfa5307d"
+rev = "a4b12ba7391e03470626504fad60d887be790cfb"
 
 [dependencies.serde]
 version = "1"
