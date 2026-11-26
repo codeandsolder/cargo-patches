@@ -1,0 +1,22 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -62,7 +62,7 @@
+ harness = false
+ 
+ [dependencies.hashbrown]
+-version = "0.16.1"
++version = "0.17.2"
+ 
+ [dependencies.mint]
+ version = "0.5.9"
+--- a/Cargo.toml.orig
++++ b/Cargo.toml.orig
+@@ -22,7 +22,7 @@
+ smallvec = "1.15.1"
+ robust = "1.2.0"
+ num-traits = "0.2.19"
+-hashbrown = "0.16.1"
++hashbrown = "0.17.2"
+ 
+ [dependencies.serde]
+ package = "serde"

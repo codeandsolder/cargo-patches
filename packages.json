@@ -183,5 +183,19 @@
       "checksum": "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5",
       "patch": "patches/base64.patch"
     }
+  ],
+  "hashbrown-017": [
+    {
+      "name": "gpu-allocator",
+      "version": "0.28.0",
+      "checksum": "51255ea7cfaadb6c5f1528d43e92a82acb2b96c43365989a28b2d44ee38f8795",
+      "patch": "patches/gpu-allocator.patch"
+    },
+    {
+      "name": "spade",
+      "version": "2.15.1",
+      "checksum": "9699399fd9349b00b184f5635b074f9ec93afffef30c853f8c875b32c0f8c7fa",
+      "patch": "patches/spade.patch"
+    }
   ]
 }
