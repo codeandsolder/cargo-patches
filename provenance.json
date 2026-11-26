@@ -1,0 +1,17 @@
+{
+  "family": "compression-backend",
+  "packages": [
+    {
+      "name": "compression-codecs",
+      "version": "0.4.47",
+      "checksum": "84f840cff84d10085260e460023934d0af699e71212b09b2a41452e8bd9cda43",
+      "patch": "patches/compression-codecs.patch"
+    },
+    {
+      "name": "oxc-browserslist",
+      "version": "5.0.1",
+      "checksum": "456720daa870e4f69f8d29fded1c8deea82da4780a6b8553baa160eb0cd8d864",
+      "patch": "patches/oxc-browserslist.patch"
+    }
+  ]
+}
