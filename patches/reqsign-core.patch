@@ -1,0 +1,278 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 94cd1c9..d737eed 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -11,7 +11,7 @@
+ 
+ [package]
+ edition = "2024"
+-rust-version = "1.86.0"
++rust-version = "1.100"
+ name = "reqsign-core"
+ version = "3.3.3"
+ build = false
+@@ -32,7 +32,8 @@ repository = "https://github.com/apache/reqsign"
+ [features]
+ default = []
+ jwt = [
+-    "dep:rsa",
++    "dep:btls",
++    "dep:pem",
+     "dep:serde",
+     "dep:serde_json",
+ ]
+@@ -71,15 +72,16 @@ version = "0.2"
+ [dependencies.log]
+ version = "0.4"
+ 
++[dependencies.pem]
++version = "4.0"
++optional = true
++
+ [dependencies.percent-encoding]
+ version = "2"
+ 
+-[dependencies.rsa]
+-version = "0.9.2"
+-features = [
+-    "pkcs5",
+-    "sha2",
+-]
++[dependencies.btls]
++git = "https://github.com/codeandsolder/btls-fast.git"
++rev = "0fddfc535515622963dfb4cb658ab63dcfa5307d"
+ optional = true
+ 
+ [dependencies.serde]
+diff --git a/src/jwt.rs b/src/jwt.rs
+index 413ff8f..d4dafd4 100644
+--- a/src/jwt.rs
++++ b/src/jwt.rs
+@@ -19,12 +19,12 @@
+ 
+ use base64::Engine;
+ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+-use rsa::RsaPrivateKey;
+-use rsa::pkcs1v15::SigningKey;
+-use rsa::pkcs8::DecodePrivateKey;
+-use rsa::rand_core::OsRng;
+-use rsa::sha2::Sha256;
+-use rsa::signature::{RandomizedSigner, SignatureEncoding};
++use btls::{
++    hash::MessageDigest,
++    pkey::{Id, PKey, PKeyRef, Private},
++    rsa::{Padding, Rsa},
++    sign::Signer,
++};
+ use serde::Serialize;
+ 
+ use crate::{Error, Result};
+@@ -33,7 +33,7 @@ use crate::{Error, Result};
+ ///
+ /// RS256 is RSA PKCS#1 v1.5 with SHA-256. The caller owns the JWT header and
+ /// claims shape so service-specific fields such as `x5t` stay service-local.
+-pub fn encode_rs256<H, C>(header: &H, claims: &C, private_key: &RsaPrivateKey) -> Result<String>
++pub fn encode_rs256<H, C>(header: &H, claims: &C, private_key: &PKeyRef<Private>) -> Result<String>
+ where
+     H: Serialize,
+     C: Serialize,
+@@ -42,28 +42,66 @@ where
+     let encoded_claims = encode_json(claims)?;
+     let signing_input = format!("{encoded_header}.{encoded_claims}");
+ 
+-    let mut rng = OsRng;
+-    let signing_key = SigningKey::<Sha256>::new(private_key.clone());
+-    let signature = signing_key.sign_with_rng(&mut rng, signing_input.as_bytes());
+-    let encoded_signature = URL_SAFE_NO_PAD.encode(signature.to_bytes());
++    let signature = sign_rs256(private_key, signing_input.as_bytes())?;
++    let encoded_signature = URL_SAFE_NO_PAD.encode(signature);
+ 
+     Ok(format!("{signing_input}.{encoded_signature}"))
+ }
+ 
+-/// Encode a JWS compact JWT using an RSA private key in PKCS#8 PEM format.
++/// Encode a JWS compact JWT using an unencrypted RSA PKCS#8 or PKCS#1 PEM key.
+ pub fn encode_rs256_pem<H, C>(header: &H, claims: &C, private_key_pem: &[u8]) -> Result<String>
+ where
+     H: Serialize,
+     C: Serialize,
+ {
+-    let private_key_pem = std::str::from_utf8(private_key_pem).map_err(|e| {
+-        Error::credential_invalid("RSA private key PEM is not valid UTF-8").with_source(e)
+-    })?;
+-    let private_key = RsaPrivateKey::from_pkcs8_pem(private_key_pem).map_err(|e| {
+-        Error::credential_invalid("failed to parse PKCS#8 RSA private key PEM").with_source(e)
++    let private_key = parse_rsa_private_key(private_key_pem)?;
++    encode_rs256(header, claims, &private_key)
++}
++
++/// Parse an unencrypted RSA PKCS#8 or PKCS#1 PEM key. Decode the explicit
++/// PEM type before native parsing, so encrypted keys never prompt for input.
++pub fn parse_rsa_private_key(private_key_pem: &[u8]) -> Result<PKey<Private>> {
++    let block = pem::parse(private_key_pem).map_err(|e| {
++        Error::credential_invalid("failed to parse RSA private key PEM").with_source(e)
+     })?;
++    let key = match block.tag() {
++        "PRIVATE KEY" => PKey::private_key_from_pkcs8(block.contents()),
++        "RSA PRIVATE KEY" => Rsa::private_key_from_der(block.contents()).and_then(PKey::from_rsa),
++        _ => {
++            return Err(Error::credential_invalid(
++                "expected an unencrypted RSA private key PEM",
++            ));
++        }
++    }
++    .map_err(|e| Error::credential_invalid("failed to decode RSA private key").with_source(e))?;
++    if key.id() != Id::RSA {
++        return Err(Error::credential_invalid("private key is not RSA"));
++    }
++    let rsa = key
++        .rsa()
++        .map_err(|e| Error::credential_invalid("invalid RSA private key").with_source(e))?;
++    if !rsa
++        .check_key()
++        .map_err(|e| Error::credential_invalid("invalid RSA private key").with_source(e))?
++    {
++        return Err(Error::credential_invalid("invalid RSA private key"));
++    }
++    Ok(key)
++}
+ 
+-    encode_rs256(header, claims, &private_key)
++/// Sign arbitrary bytes with RSASSA-PKCS1-v1_5 and SHA-256.
++///
++/// Shared by JWT assertions and Google V4 signed URLs.
++pub fn sign_rs256(private_key: &PKeyRef<Private>, message: &[u8]) -> Result<Vec<u8>> {
++    if private_key.id() != Id::RSA {
++        return Err(Error::credential_invalid("private key is not RSA"));
++    }
++    let sign = || {
++        let mut signer = Signer::new(MessageDigest::sha256(), private_key)?;
++        signer.set_rsa_padding(Padding::PKCS1)?;
++        signer.sign_oneshot_to_vec(message)
++    };
++    sign().map_err(|e| Error::unexpected("failed to sign RS256").with_source(e))
+ }
+ 
+ fn encode_json<T>(value: &T) -> Result<String>
+@@ -79,9 +117,7 @@ where
+ mod tests {
+     use super::*;
+     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+-    use rsa::pkcs1v15::{Signature, VerifyingKey};
+-    use rsa::rand_core::OsRng;
+-    use rsa::signature::Verifier;
++    use btls::sign::Verifier;
+     use serde_json::json;
+ 
+     #[derive(Serialize)]
+@@ -101,8 +137,8 @@ mod tests {
+ 
+     #[test]
+     fn encode_rs256_keeps_jws_shape_and_verifiable_signature() -> Result<()> {
+-        let mut rng = OsRng;
+-        let private_key = RsaPrivateKey::new(&mut rng, 2048)
++        let private_key = Rsa::generate(2048)
++            .and_then(PKey::from_rsa)
+             .map_err(|e| Error::unexpected("failed to generate test RSA key").with_source(e))?;
+ 
+         let jwt = encode_rs256(
+@@ -141,13 +177,53 @@ mod tests {
+         let signature = URL_SAFE_NO_PAD
+             .decode(parts[2])
+             .map_err(|e| Error::unexpected("failed to decode JWT signature").with_source(e))?;
+-        let signature = Signature::try_from(signature.as_slice())
+-            .map_err(|e| Error::unexpected("failed to parse JWT signature").with_source(e))?;
+-        let verifying_key = VerifyingKey::<Sha256>::new(private_key.to_public_key());
+-        verifying_key
+-            .verify(format!("{}.{}", parts[0], parts[1]).as_bytes(), &signature)
+-            .map_err(|e| Error::unexpected("failed to verify JWT signature").with_source(e))?;
++        let mut verifier = Verifier::new(MessageDigest::sha256(), &private_key)
++            .map_err(|e| Error::unexpected("failed to initialize verifier").with_source(e))?;
++        verifier
++            .set_rsa_padding(Padding::PKCS1)
++            .map_err(|e| Error::unexpected("failed to set RSA padding").with_source(e))?;
++        assert!(
++            verifier
++                .verify_oneshot(&signature, format!("{}.{}", parts[0], parts[1]).as_bytes())
++                .map_err(|e| Error::unexpected("failed to verify JWT signature").with_source(e))?
++        );
+ 
+         Ok(())
+     }
++    #[test]
++    fn rs256_matches_independent_openssl_reference() {
++        // Public test-only key from btls/test/rsa.pem. Expected bytes generated
++        // with openssl dgst -sha256 -sign, not with the provider under test.
++        let key =
++            parse_rsa_private_key(include_bytes!("../tests/fixtures/rs256-test-key.pem")).unwrap();
++        let expected =
++            hex::decode(include_str!("../tests/fixtures/rs256-openssl-signature.hex").trim())
++                .unwrap();
++        assert_eq!(
++            sign_rs256(&key, b"reqsign RS256 reference vector").unwrap(),
++            expected
++        );
++    }
++
++    #[test]
++    fn pem_key_formats_and_wrong_key_rejection() {
++        let key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
++        let pkcs8 = key.private_key_to_pem_pkcs8().unwrap();
++        let pkcs1 = key.rsa().unwrap().private_key_to_pem().unwrap();
++        let message = b"reqsign RS256 key-format regression";
++        let signature = sign_rs256(&key, message).unwrap();
++        for pem in [pkcs8, pkcs1] {
++            let parsed = parse_rsa_private_key(&pem).unwrap();
++            assert!(parsed.public_eq(&key));
++            assert_eq!(sign_rs256(&parsed, message).unwrap(), signature);
++        }
++        let wrong = PKey::generate(Id::ED25519).unwrap();
++        assert!(parse_rsa_private_key(&wrong.private_key_to_pem_pkcs8().unwrap()).is_err());
++        assert!(sign_rs256(&wrong, message).is_err());
++        assert!(parse_rsa_private_key(b"invalid key").is_err());
++        let mut der = key.private_key_to_der_pkcs8().unwrap();
++        der.push(0);
++        let trailing = pem::encode(&pem::Pem::new("PRIVATE KEY", der));
++        assert!(parse_rsa_private_key(trailing.as_bytes()).is_err());
++    }
+ }
+diff --git a/tests/fixtures/rs256-openssl-signature.hex b/tests/fixtures/rs256-openssl-signature.hex
+new file mode 100644
+index 0000000..ed30727
+--- /dev/null
++++ b/tests/fixtures/rs256-openssl-signature.hex
+@@ -0,0 +1 @@
++0d5438b24319c3ce55729dd256951a937b351565bc08cf8644c046f15068c54c33647fa2061971591cd5dbcd945489e6dd9e823a5a4aef756543e80e2b8296f421b5ff706d3cd74b4160ab3032da083380da326ab6b16e6cfb19a7cfb28ccc27eb91b2e6d5b1a618c66a677d2a8c34de27a4aad53b09852abc80c9d183f9f178754f13a8330e68a4b65e8c610c1852f39591a262120326039cd2ac86c4aaa3c066aaacde204755e2634e972e3ff93a02d9f89ea30b036960431b70a2e1316a0a3d5be1d539284cd44510feeccdb67828fe7061c3df785ae3167f191e66c1ffa93a8c76019da61b05f71f5262253cfbdce2246beeac761a3a961e7c3e135bf89a
+diff --git a/tests/fixtures/rs256-test-key.pem b/tests/fixtures/rs256-test-key.pem
+new file mode 100644
+index 0000000..d8185fe
+--- /dev/null
++++ b/tests/fixtures/rs256-test-key.pem
+@@ -0,0 +1,27 @@
++-----BEGIN RSA PRIVATE KEY-----
++MIIEowIBAAKCAQEAofgWCuLjybRlzo0tZWJjNiuSfb4p4fAkd/wWJcyQoTbji9k0
++l8W26mPddxHmfHQp+Vaw+4qPCJrcS2mJPMEzP1Pt0Bm4d4QlL+yRT+SFd2lZS+pC
++gNMsD1W/YpRPEwOWvG6b32690r2jZ47soMZo9wGzjb/7OMg0LOL+bSf63kpaSHSX
++ndS5z5rexMdbBYUsLA9e+KXBdQOS+UTo7WTBEMa2R2CapHg665xsmtdVMTBQY4uD
++Zlxvb3qCo5ZwKh9kG4LT6/I5IhlJH7aGhyxXFvUK+DWNmoudF8NAco9/h9iaGNj8
++q2ethFkMLs91kzk2PAcDTW9gb54h4FRWyuXpoQIDAQABAoIBABKucaRpzQorw35S
++bEUAVx8dYXUdZOlJcHtiWQ+dC6V8ljxAHj/PLyzTveyI5QO/xkObCyjIL303l2cf
++UhPu2MFaJdjVzqACXuOrLot/eSFvxjvqVidTtAZExqFRJ9mylUVAoLvhowVWmC1O
++n95fZCXxTUtxNEG1Xcc7m0rtzJKs45J+N/V9DP1edYH6USyPSWGp6wuA+KgHRnKK
++Vf9GRx80JQY7nVNkL17eHoTWEwga+lwi0FEoW9Y7lDtWXYmKBWhUE+U8PGxlJf8f
++40493HDw1WRQ/aSLoS4QTp3rn7gYgeHEvfJdkkf0UMhlknlo53M09EFPdadQ4TlU
++bjqKc50CgYEA4BzEEOtIpmVdVEZNCqS7baC4crd0pqnRH/5IB3jw3bcxGn6QLvnE
++tfdUdiYrqBdss1l58BQ3KhooKeQTa9AB0Hw/Py5PJdTJNPY8cQn7ouZ2KKDcmnPG
++BY5t7yLc1QlQ5xHdwW1VhvKn+nXqhJTBgIPgtldC+KDV5z+y2XDwGUcCgYEAuQPE
++fgmVtjL0Uyyx88GZFF1fOunH3+7cepKmtH4pxhtCoHqpWmT8YAmZxaewHgHAjLYs
++p1ZSe7zFYHj7C6ul7TjeLQeZD/YwD66t62wDmpe/HlB+TnBA+njbglfIsRLtXlnD
++zQkv5dTltRJ11BKBBypeeF6689rjcJIDEz9RWdcCgYAHAp9XcCSrn8wVkMVkKdb7
++DOX4IKjzdahm+ctDAJN4O/y7OW5FKebvUjdAIt2GuoTZ71iTG+7F0F+lP88jtjP4
++U4qe7VHoewl4MKOfXZKTe+YCS1XbNvfgwJ3Ltyl1OH9hWvu2yza7q+d5PCsDzqtm
++27kxuvULVeya+TEdAB1ijQKBgQCH/3r6YrVH/uCWGy6bzV1nGNOdjKc9tmkfOJmN
++54dxdixdpozCQ6U4OxZrsj3FcOhHBsqAHvX2uuYjagqvo3cOj1TRqNocX40omfCC
++Mx3bD1yPPf/6TI2XECva/ggqEY2mYzmIiA5LVVmc5nrybr+lssFKneeyxN2Wq93S
++0iJMdQKBgCGHewxzoa1r8ZMD0LETNrToK423K377UCYqXfg5XMclbrjPbEC3YI1Z
++NqMtuhdBJqUnBi6tjKMF+34Xf0CUN8ncuXGO2CAYvO8PdyCixHX52ybaDjy1FtCE
++6yUXjoKNXKvUm7MWGsAYH6f4IegOetN5NvmUMFStCSkh7ixZLkN1
++-----END RSA PRIVATE KEY-----
