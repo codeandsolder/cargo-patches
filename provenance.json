@@ -1,0 +1,17 @@
+{
+  "family": "ksp-image-codecs",
+  "packages": [
+    {
+      "name": "png",
+      "version": "0.18.1",
+      "checksum": "60769b8b31b2a9f263dae2776c37b1b28ae246943cf719eb6946a1db05128a61",
+      "patch": "patches/png.patch"
+    },
+    {
+      "name": "usvg",
+      "version": "0.47.0",
+      "checksum": "d46cf96c5f498d36b7a9693bc6a7075c0bb9303189d61b2249b0dc3d309c07de",
+      "patch": "patches/usvg.patch"
+    }
+  ]
+}
