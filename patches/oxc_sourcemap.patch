@@ -27,50 +27,69 @@ index 4738f3b..2f8bede 100644
  napi = { version = "3", optional = true }
  napi-derive = { version = "3", optional = true }
 diff --git a/src/lib.rs b/src/lib.rs
-index 506dc1d..f436719 100644
+index 506dc1d..16cea41 100644
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -22,3 +22,17 @@ pub use sourcemap::{SourceMap, SourceMapParts};
+@@ -22,3 +22,31 @@ pub use sourcemap::{SourceMap, SourceMapParts};
  pub use sourcemap_builder::SourceMapBuilder;
  pub use sourcemap_visualizer::SourcemapVisualizer;
  pub use token::{SourceViewToken, Token, TokenChunk};
 +
-+fn encode_base64(input: &[u8]) -> String {
++fn encode_base64(input: &[u8], prefix: &str) -> String {
 +    use base64::Engine;
-+    #[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", target_feature = "neon")))]
++    let encoded_len = base64::encoded_len(input.len(), true).expect("base64 length overflow");
++    let capacity = prefix.len().checked_add(encoded_len).expect("base64 URL length overflow");
++    let mut output = String::with_capacity(capacity);
++    output.push_str(prefix);
++    #[cfg(any(
++        target_arch = "x86_64",
++        all(target_arch = "aarch64", target_feature = "neon"),
++        all(target_arch = "wasm32", target_feature = "simd128")
++    ))]
 +    {
-+        static ENGINE: std::sync::LazyLock<base64::engine::Simd> =
-+            std::sync::LazyLock::new(|| base64::engine::Simd::standard(base64::engine::general_purpose::PAD));
-+        ENGINE.encode(input)
++        static ENGINE: std::sync::LazyLock<base64::engine::Simd> = std::sync::LazyLock::new(|| {
++            base64::engine::Simd::standard(base64::engine::general_purpose::PAD)
++        });
++        ENGINE.encode_string(input, &mut output);
 +    }
-+    #[cfg(not(any(target_arch = "x86_64", all(target_arch = "aarch64", target_feature = "neon"))))]
++    #[cfg(not(any(
++        target_arch = "x86_64",
++        all(target_arch = "aarch64", target_feature = "neon"),
++        all(target_arch = "wasm32", target_feature = "simd128")
++    )))]
 +    {
-+        base64::engine::general_purpose::STANDARD.encode(input)
++        base64::engine::general_purpose::STANDARD.encode_string(input, &mut output);
 +    }
++    output
 +}
 diff --git a/src/sourcemap.rs b/src/sourcemap.rs
-index 5ad4d02..1b7a86a 100644
+index 5ad4d02..89609bc 100644
 --- a/src/sourcemap.rs
 +++ b/src/sourcemap.rs
-@@ -89,7 +89,7 @@ impl<'a> SourceMap<'a> {
+@@ -89,8 +89,10 @@ impl<'a> SourceMap<'a> {
  
      /// Convert `SourceMap` to vlq sourcemap data url.
      pub fn to_data_url(&self) -> String {
 -        let base_64_str = base64_simd::STANDARD.encode_to_string(self.to_json_string().as_bytes());
-+        let base_64_str = crate::encode_base64(self.to_json_string().as_bytes());
-         format!("data:application/json;charset=utf-8;base64,{base_64_str}")
+-        format!("data:application/json;charset=utf-8;base64,{base_64_str}")
++        crate::encode_base64(
++            self.to_json_string().as_bytes(),
++            "data:application/json;charset=utf-8;base64,",
++        )
      }
  
+     /// Detach this `SourceMap` from its input buffer by allocating owned
 diff --git a/src/sourcemap_visualizer.rs b/src/sourcemap_visualizer.rs
-index 190a4a5..66e41d1 100644
+index 190a4a5..270827e 100644
 --- a/src/sourcemap_visualizer.rs
 +++ b/src/sourcemap_visualizer.rs
-@@ -17,7 +17,7 @@ impl<'a, 'sm> SourcemapVisualizer<'a, 'sm> {
+@@ -17,8 +17,7 @@ impl<'a, 'sm> SourcemapVisualizer<'a, 'sm> {
      pub fn get_url(&self) -> String {
          let result = self.sourcemap.to_json_string();
          let s = format!("{}\0{}{}\0{}", self.code.len(), self.code, result.len(), result);
 -        let hash = base64_simd::STANDARD.encode_to_string(s);
-+        let hash = crate::encode_base64(s.as_bytes());
-         format!("https://evanw.github.io/source-map-visualization/#{hash}")
+-        format!("https://evanw.github.io/source-map-visualization/#{hash}")
++        crate::encode_base64(s.as_bytes(), "https://evanw.github.io/source-map-visualization/#")
      }
  
+     pub fn get_text(&self) -> String {
