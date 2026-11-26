@@ -1,0 +1,25 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -42,10 +42,7 @@
+ [features]
+ bump_estimate = ["vello_encoding/bump_estimate"]
+ debug_layers = []
+-default = [
+-    "wgpu",
+-    "wgpu_default",
+-]
++default = ["wgpu"]
+ hot_reload = ["vello_shaders/compile"]
+ wgpu = [
+     "dep:wgpu",
+--- a/Cargo.toml.orig
++++ b/Cargo.toml.orig
+@@ -16,7 +16,7 @@
+ targets = []
+ 
+ [features]
+-default = ["wgpu", "wgpu_default"]
++default = ["wgpu"]
+ # Enables GPU memory usage estimation. This performs additional computations
+ # in order to estimate the minimum required allocations for buffers backing
+ # bump-allocated GPU memory.
