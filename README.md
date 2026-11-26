@@ -18,3 +18,25 @@ Example:
 [patch.crates-io]
 surrealdb-diskann = { git = "https://github.com/codeandsolder/cargo-patches.git", branch = "generated/surrealdb-diskann" }
 ```
+
+## Reqsign native signing family
+
+The `reqsign-crypto` queue contains the exact registry versions of Reqsign core,
+Azure Storage and Google used by sccache. It replaces their RustCrypto RSA
+signing with btls-fast while preserving RS256, JWT header/claim shapes and
+Google's uppercase hexadecimal signed-URL signatures. It shares the native
+RSA key loader and signing primitive; the full native family must be patched
+together because the core signer now accepts a btls key. This queue targets
+native consumers; it is not a WASM replacement. The explicit btls revision must
+match the consumer's Wreq and other btls dependencies. Update the family pin and
+consumer together when changing btls. Do not manually edit the generated branch.
+
+The pure Rust SHA/HMAC helpers are retained; they are also used for non-RSA
+request signing and the consumer still needs hashing for other operations.
+
+Explicit `exclude_files` entries omit identified upstream files that are not
+required for the published package. Each entry specifies a package-relative
+path and SHA-256 of the exact upstream file. Import and publication both verify
+the file before removing it, so an upstream change requires review. Reqsign
+Google's unused testbucket credential fixture is omitted; no push-protection
+exception is needed.
