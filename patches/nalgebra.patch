@@ -1,0 +1,97 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -68,7 +68,7 @@
+ convert-glam030 = ["glam030"]
+ convert-glam031 = ["glam031"]
+ convert-glam032 = ["glam032"]
+-convert-glam033 = ["glam033"]
++convert-glam034 = ["glam034"]
+ convert-mint = ["mint"]
+ debug = [
+     "approx/num-complex",
+@@ -87,7 +87,7 @@
+     "glam030?/libm",
+     "glam031?/libm",
+     "glam032?/libm",
+-    "glam033?/libm",
++    "glam034?/libm",
+ ]
+ libm-force = ["simba/libm_force"]
+ macros = ["nalgebra-macros"]
+@@ -130,7 +130,7 @@
+     "glam030?/std",
+     "glam031?/std",
+     "glam032?/std",
+-    "glam033?/std",
++    "glam034?/std",
+ ]
+ 
+ [lib]
+@@ -255,8 +255,8 @@
+ default-features = false
+ package = "glam"
+ 
+-[dependencies.glam033]
+-version = "0.33"
++[dependencies.glam034]
++version = "0.34"
+ features = [
+     "f64",
+     "i32",
+--- a/Cargo.toml.orig
++++ b/Cargo.toml.orig
+@@ -34,7 +34,7 @@
+     "glam030?/std",
+     "glam031?/std",
+     "glam032?/std",
+-    "glam033?/std",
++    "glam034?/std",
+ ]
+ sparse = []
+ debug = ["approx/num-complex", "rand"]
+@@ -46,7 +46,7 @@
+     "glam030?/libm",
+     "glam031?/libm",
+     "glam032?/libm",
+-    "glam033?/libm",
++    "glam034?/libm",
+ ]
+ libm-force = ["simba/libm_force"]
+ macros = ["nalgebra-macros"]
+@@ -57,7 +57,7 @@
+ convert-glam030 = ["glam030"]
+ convert-glam031 = ["glam031"]
+ convert-glam032 = ["glam032"]
+-convert-glam033 = ["glam033"]
++convert-glam034 = ["glam034"]
+ 
+ # Serialization
+ ## To use serde in a #[no-std] environment, enable the
+@@ -106,7 +106,7 @@
+ glam030 = { package = "glam", version = "0.30", optional = true, default-features = false }
+ glam031 = { package = "glam", version = "0.31", optional = true, default-features = false }
+ glam032 = { package = "glam", version = "0.32", optional = true, default-features = false }
+-glam033 = { package = "glam", version = "0.33", optional = true, default-features = false, features = ["f64", "i32", "u32"] }
++glam034 = { package = "glam", version = "0.34", optional = true, default-features = false, features = ["f64", "i32", "u32"] }
+ rayon = { version = "1.6", optional = true }
+ defmt = { version = "1.0.1", optional = true }
+ encase = { version = "0.12", optional = true }
+--- a/src/third_party/glam/mod.rs
++++ b/src/third_party/glam/mod.rs
+@@ -4,5 +4,6 @@
+ mod v031;
+ #[cfg(feature = "glam032")]
+ mod v032;
+-#[cfg(feature = "glam033")]
+-mod v033;
++#[cfg(feature = "glam034")]
++#[path = "v033/mod.rs"]
++mod v034;
+--- a/src/third_party/glam/v033/mod.rs
++++ b/src/third_party/glam/v033/mod.rs
+@@ -15,4 +15,4 @@
+ #[path = "../common/glam_unit_complex.rs"]
+ mod glam_unit_complex;
+ 
+-pub(self) use glam033 as glam;
++pub(self) use glam034 as glam;
