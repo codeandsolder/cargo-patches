@@ -1,0 +1,21 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 5dac6cb..a4778b8 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -26,5 +26,5 @@ version = "1"
+ version = "1"
+ 
+ [dependencies.syn]
+-version = "2"
++version = "3"
+ features = ["full"]
+diff --git a/Cargo.toml.orig b/Cargo.toml.orig
+index 5337de7..a5ae1f7 100644
+--- a/Cargo.toml.orig
++++ b/Cargo.toml.orig
+@@ -11,4 +11,4 @@ proc-macro = true
+ [dependencies]
+ proc-macro2 = "1"
+ quote = "1"
+-syn = { version = "2", features = ["full"] }
++syn = { version = "3", features = ["full"] }
