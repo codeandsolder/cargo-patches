@@ -1,0 +1,41 @@
+diff --git a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -95,10 +95,8 @@
+ 
+ [dependencies.flate2]
+ version = "1.0.35"
+-
+-[dependencies.miniz_oxide]
+-version = "0.8"
+-features = ["simd"]
++default-features = false
++features = ["zlib-rs"]
+ 
+ [dev-dependencies.approx]
+ version = "0.5.1"
+diff --git a/Cargo.toml.orig b/Cargo.toml.orig
+--- a/Cargo.toml.orig
++++ b/Cargo.toml.orig
+@@ -24,8 +24,7 @@
+ bitflags = "2.0"
+ crc32fast = "1.2.0"
+ fdeflate = "0.3.3"
+-flate2 = "1.0.35"
+-miniz_oxide = { version = "0.8", features = ["simd"] }
++flate2 = { version = "1.0.35", default-features = false, features = ["zlib-rs"] }
+ 
+ [dev-dependencies]
+ approx = "0.5.1"
+diff --git a/src/decoder/zlib.rs b/src/decoder/zlib.rs
+--- a/src/decoder/zlib.rs
++++ b/src/decoder/zlib.rs
+@@ -55,7 +55,7 @@
+     pub filled: usize,
+ }
+ 
+-/// Ergonomics wrapper around `miniz_oxide::inflate::stream` for zlib compressed data.
++/// Ergonomics wrapper around `fdeflate::Decompressor` for zlib compressed data.
+ pub(super) struct ZlibStream {
+     /// Current decoding state.
+     state: Box<fdeflate::Decompressor>,
