@@ -1,0 +1,118 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -48,7 +48,7 @@
+ ]
+ approx = [
+     "dep:approx",
+-    "glam/approx",
++    "glam/approx-05",
+ ]
+ bytemuck = [
+     "dep:bytemuck",
+@@ -60,9 +60,8 @@
+     "std",
+     "all-types",
+ ]
+-encase = ["glam/encase"]
++encase = ["glam/encase-012"]
+ f64 = ["glam/f64"]
+-fast-math = ["glam/fast-math"]
+ float-types = [
+     "f64",
+     "glam/float-types",
+@@ -90,16 +89,16 @@
+     "simba/libm_force",
+     "num-traits/libm",
+ ]
+-mint = ["glam/mint"]
++mint = ["glam/mint-05"]
+ nalgebra = ["dep:nalgebra"]
+ nostd-libm = [
+     "simba/libm",
+     "glam/nostd-libm",
+ ]
+-rand = ["glam/rand"]
++rand = ["glam/rand-010"]
+ rkyv = [
+     "dep:rkyv",
+-    "glam/rkyv",
++    "glam/rkyv-08",
+ ]
+ scalar-math = ["glam/scalar-math"]
+ serde = [
+@@ -138,12 +137,12 @@
+ optional = true
+ 
+ [dependencies.glam]
+-version = "0.33.7"
++version = "0.34"
+ default-features = false
+ 
+ [dependencies.nalgebra]
+ version = "0.35"
+-features = ["convert-glam033"]
++features = ["convert-glam034"]
+ optional = true
+ default-features = false
+ 
+@@ -170,5 +169,5 @@
+ version = "0.5"
+ 
+ [dev-dependencies.glam]
+-version = "0.33"
+-features = ["approx"]
++version = "0.34"
++features = ["approx-05"]
+--- a/Cargo.toml.orig
++++ b/Cargo.toml.orig
+@@ -34,7 +34,7 @@
+ nostd-libm = ["simba/libm", "glam/nostd-libm"]
+ 
+ # Approx is always available via re-export
+-approx = ["dep:approx", "glam/approx"]
++approx = ["dep:approx", "glam/approx-05"]
+ 
+ # CUDA support (glam feature)
+ cuda = ["glam/cuda"]
+@@ -47,18 +47,17 @@
+ glam-assert = ["glam/glam-assert"]
+ 
+ # Fast math approximations
+-fast-math = ["glam/fast-math"]
+ 
+ # Rkyv serialization
+-rkyv = ["dep:rkyv", "glam/rkyv"]
++rkyv = ["dep:rkyv", "glam/rkyv-08"]
+ 
+ # Mint interop
+-mint = ["glam/mint"]
++mint = ["glam/mint-05"]
+ 
+ # Rand support
+-rand = ["glam/rand"]
++rand = ["glam/rand-010"]
+ 
+-encase = ["glam/encase"]
++encase = ["glam/encase-012"]
+ 
+ # Type-gating features (mirror glam 0.33). Enabling any of these transitively
+ # enables the matching glam feature so the corresponding type aliases become
+@@ -92,15 +91,15 @@
+ usize = ["glam/usize"]
+ 
+ [dependencies]
+-glam = { version = "0.33.7", default-features = false }
++glam = { version = "0.34", default-features = false }
+ simba = { version = "0.10", default-features = false }
+ num-traits = { version = "0.2", default-features = false, features = ["libm"] }
+ approx = { version = "0.5", default-features = false, optional = true }
+ serde = { version = "1.0", optional = true, features = ["derive"] }
+ bytemuck = { version = "1", features = ["derive"], optional = true }
+-nalgebra = { version = "0.35", default-features = false, features = ["convert-glam033"], optional = true }
++nalgebra = { version = "0.35", default-features = false, features = ["convert-glam034"], optional = true }
+ rkyv = { version = "0.8", optional = true, default-features = false }
+ 
+ [dev-dependencies]
+ approx = "0.5"
+-glam = { version = "0.33", features = ["approx"] }
++glam = { version = "0.34", features = ["approx-05"] }
