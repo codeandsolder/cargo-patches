@@ -1,0 +1,29 @@
+{
+  "family": "reqsign-crypto",
+  "packages": [
+    {
+      "name": "reqsign-core",
+      "version": "3.3.3",
+      "checksum": "5041e58962ebf1a1806a06f45735f1932c9dda25ac2814a59a1b4a3f619c7862",
+      "patch": "patches/reqsign-core.patch"
+    },
+    {
+      "name": "reqsign-azure-storage",
+      "version": "3.3.1",
+      "checksum": "cd2821e751de92f75df704aed0039ca43f8a21c8635021c4727898369274fb05",
+      "patch": "patches/reqsign-azure-storage.patch"
+    },
+    {
+      "name": "reqsign-google",
+      "version": "3.3.0",
+      "checksum": "a00ab10d7d395237b232233d0064a73c740ad81b1795527f887eeb02f122e6f4",
+      "patch": "patches/reqsign-google.patch",
+      "exclude_files": [
+        {
+          "path": "testdata/testbucket_credential.json",
+          "checksum": "9ab5b0019b0eee58c04ddc4bd9ea18486b2cc1df0d291ab1ef9eb9b1068e5ac7"
+        }
+      ]
+    }
+  ]
+}
