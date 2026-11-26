@@ -1,0 +1,76 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index fdd89cf..9d83b8e 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -88,8 +88,8 @@ name = "serialize"
+ path = "benches/serialize.rs"
+ harness = false
+ 
+-[dependencies.base64-simd]
+-version = "0.8"
++[dependencies.base64]
++version = "0.23.1"
+ 
+ [dependencies.json-escape-simd]
+ version = "3"
+diff --git a/Cargo.toml.orig b/Cargo.toml.orig
+index 4738f3b..2f8bede 100644
+--- a/Cargo.toml.orig
++++ b/Cargo.toml.orig
+@@ -76,7 +76,7 @@ harness = false
+ ignored = ["napi"]
+ 
+ [dependencies]
+-base64-simd = "0.8"
++base64 = "0.23.1"
+ json-escape-simd = "3"
+ napi = { version = "3", optional = true }
+ napi-derive = { version = "3", optional = true }
+diff --git a/src/lib.rs b/src/lib.rs
+index 506dc1d..f436719 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -22,3 +22,17 @@ pub use sourcemap::{SourceMap, SourceMapParts};
+ pub use sourcemap_builder::SourceMapBuilder;
+ pub use sourcemap_visualizer::SourcemapVisualizer;
+ pub use token::{SourceViewToken, Token, TokenChunk};
++
++fn encode_base64(input: &[u8]) -> String {
++    use base64::Engine;
++    #[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", target_feature = "neon")))]
++    {
++        static ENGINE: std::sync::LazyLock<base64::engine::Simd> =
++            std::sync::LazyLock::new(|| base64::engine::Simd::standard(base64::engine::general_purpose::PAD));
++        ENGINE.encode(input)
++    }
++    #[cfg(not(any(target_arch = "x86_64", all(target_arch = "aarch64", target_feature = "neon"))))]
++    {
++        base64::engine::general_purpose::STANDARD.encode(input)
++    }
++}
+diff --git a/src/sourcemap.rs b/src/sourcemap.rs
+index 5ad4d02..1b7a86a 100644
+--- a/src/sourcemap.rs
++++ b/src/sourcemap.rs
+@@ -89,7 +89,7 @@ impl<'a> SourceMap<'a> {
+ 
+     /// Convert `SourceMap` to vlq sourcemap data url.
+     pub fn to_data_url(&self) -> String {
+-        let base_64_str = base64_simd::STANDARD.encode_to_string(self.to_json_string().as_bytes());
++        let base_64_str = crate::encode_base64(self.to_json_string().as_bytes());
+         format!("data:application/json;charset=utf-8;base64,{base_64_str}")
+     }
+ 
+diff --git a/src/sourcemap_visualizer.rs b/src/sourcemap_visualizer.rs
+index 190a4a5..66e41d1 100644
+--- a/src/sourcemap_visualizer.rs
++++ b/src/sourcemap_visualizer.rs
+@@ -17,7 +17,7 @@ impl<'a, 'sm> SourcemapVisualizer<'a, 'sm> {
+     pub fn get_url(&self) -> String {
+         let result = self.sourcemap.to_json_string();
+         let s = format!("{}\0{}{}\0{}", self.code.len(), self.code, result.len(), result);
+-        let hash = base64_simd::STANDARD.encode_to_string(s);
++        let hash = crate::encode_base64(s.as_bytes());
+         format!("https://evanw.github.io/source-map-visualization/#{hash}")
+     }
+ 

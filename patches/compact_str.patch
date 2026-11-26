@@ -1,0 +1,125 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 3ca8dc0..917b279 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -184,9 +184,6 @@ version = "0.9"
+ optional = true
+ default-features = false
+ 
+-[dependencies.static_assertions]
+-version = "1"
+-
+ [dependencies.utoipa]
+ version = "5"
+ optional = true
+diff --git a/Cargo.toml.orig b/Cargo.toml.orig
+index 16a8f39..da5d01d 100644
+--- a/Cargo.toml.orig
++++ b/Cargo.toml.orig
+@@ -68,7 +68,6 @@ castaway = { version = "0.2.3", default-features = false, features = ["alloc"] }
+ cfg-if = "1"
+ itoa = "1"
+ zmij = "1"
+-static_assertions = "1"
+ 
+ # `defmt` only works in ELF binaries.
+ [target.'cfg(not(target_os = "windows"))'.dependencies]
+diff --git a/src/lib.rs b/src/lib.rs
+index 3fc71d0..373560d 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -2690,5 +2690,5 @@ fn unwrap_with_msg_fail<E: fmt::Display>(error: E) -> ! {
+     panic!("{error}")
+ }
+ 
+-static_assertions::assert_eq_size!(CompactString, String);
+-static_assertions::assert_eq_size!(Option<CompactString>, CompactString);
++const _: () = assert!(core::mem::size_of::<CompactString>() == core::mem::size_of::<String>());
++const _: () = assert!(core::mem::size_of::<Option<CompactString>>() == core::mem::size_of::<CompactString>());
+diff --git a/src/repr/capacity.rs b/src/repr/capacity.rs
+index 8c1f395..8eac75e 100644
+--- a/src/repr/capacity.rs
++++ b/src/repr/capacity.rs
+@@ -54,8 +54,8 @@ pub(crate) const MAX_VALUE: usize = {
+ #[repr(transparent)]
+ pub(crate) struct Capacity(usize);
+ 
+-static_assertions::assert_eq_size!(Capacity, usize);
+-static_assertions::assert_eq_align!(Capacity, usize);
++const _: () = assert!(core::mem::size_of::<Capacity>() == core::mem::size_of::<usize>());
++const _: () = assert!(core::mem::align_of::<Capacity>() == core::mem::align_of::<usize>());
+ 
+ impl fmt::Debug for Capacity {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+diff --git a/src/repr/heap.rs b/src/repr/heap.rs
+index 191d118..7cd62c8 100644
+--- a/src/repr/heap.rs
++++ b/src/repr/heap.rs
+@@ -28,8 +28,8 @@ pub(crate) struct HeapBuffer {
+     pub(crate) len: usize,
+     pub(crate) cap: Capacity,
+ }
+-static_assertions::assert_eq_size!(HeapBuffer, Repr);
+-static_assertions::assert_eq_align!(HeapBuffer, Repr);
++const _: () = assert!(core::mem::size_of::<HeapBuffer>() == core::mem::size_of::<Repr>());
++const _: () = assert!(core::mem::align_of::<HeapBuffer>() == core::mem::align_of::<Repr>());
+ 
+ impl HeapBuffer {
+     /// Allocate a heap buffer, copy `text` into it, and return the raw `(ptr, capacity)` pair
+diff --git a/src/repr/inline.rs b/src/repr/inline.rs
+index 19ce4b6..ad9d9bd 100644
+--- a/src/repr/inline.rs
++++ b/src/repr/inline.rs
+@@ -9,8 +9,8 @@ pub(crate) struct InlineBuffer(pub(crate) [u8; MAX_SIZE]);
+ #[repr(C, align(4))]
+ pub(crate) struct InlineBuffer(pub(crate) [u8; MAX_SIZE]);
+ 
+-static_assertions::assert_eq_size!(InlineBuffer, Repr);
+-static_assertions::assert_eq_align!(InlineBuffer, Repr);
++const _: () = assert!(core::mem::size_of::<InlineBuffer>() == core::mem::size_of::<Repr>());
++const _: () = assert!(core::mem::align_of::<InlineBuffer>() == core::mem::align_of::<Repr>());
+ 
+ impl InlineBuffer {
+     /// Construct a new [`InlineString`]. A string that lives in a small buffer on the stack
+diff --git a/src/repr/last_utf8_char.rs b/src/repr/last_utf8_char.rs
+index 3ff827c..1598bde 100644
+--- a/src/repr/last_utf8_char.rs
++++ b/src/repr/last_utf8_char.rs
+@@ -241,5 +241,5 @@ pub(crate) enum LastByte {
+     Static = 217,
+ }
+ 
+-static_assertions::assert_eq_size!(LastByte, Option<LastByte>, u8);
+-static_assertions::const_assert!(core::mem::size_of::<String>() <= 24);
++const _: () = assert!(core::mem::size_of::<LastByte>() == core::mem::size_of::<Option<LastByte>>() && core::mem::size_of::<LastByte>() == core::mem::size_of::<u8>());
++const _: () = assert!(core::mem::size_of::<String>() <= 24);
+diff --git a/src/repr/mod.rs b/src/repr/mod.rs
+index 55c2030..0aecefb 100644
+--- a/src/repr/mod.rs
++++ b/src/repr/mod.rs
+@@ -58,7 +58,7 @@ pub(crate) struct Repr(
+     /// value.
+     LastByte,
+ );
+-static_assertions::assert_eq_size!([u8; MAX_SIZE], Repr);
++const _: () = assert!(core::mem::size_of::<[u8; MAX_SIZE]>() == core::mem::size_of::<Repr>());
+ 
+ unsafe impl Send for Repr {}
+ unsafe impl Sync for Repr {}
+diff --git a/src/repr/static_str.rs b/src/repr/static_str.rs
+index 76426de..90d867d 100644
+--- a/src/repr/static_str.rs
++++ b/src/repr/static_str.rs
+@@ -14,9 +14,9 @@ pub(crate) struct StaticStr {
+     #[allow(unused)]
+     discriminant: [u8; DISCRIMINANT_SIZE],
+ }
+-static_assertions::assert_eq_size!(StaticStr, Repr);
+-static_assertions::assert_eq_align!(StaticStr, Repr);
+-static_assertions::assert_eq_size!(&'static str, (*const u8, usize));
++const _: () = assert!(core::mem::size_of::<StaticStr>() == core::mem::size_of::<Repr>());
++const _: () = assert!(core::mem::align_of::<StaticStr>() == core::mem::align_of::<Repr>());
++const _: () = assert!(core::mem::size_of::<&'static str>() == core::mem::size_of::<(*const u8, usize)>());
+ 
+ impl StaticStr {
+     #[inline]

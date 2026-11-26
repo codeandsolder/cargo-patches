@@ -1,0 +1,26 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index c9d9e8b..6a35a9a 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -58,7 +58,7 @@ version = "1.0.95"
+ version = "1"
+ 
+ [dependencies.syn]
+-version = "2"
++version = "3"
+ features = ["full"]
+ 
+ [dependencies.uncased_]
+diff --git a/Cargo.toml.orig b/Cargo.toml.orig
+index 608b2f4..6ba4165 100644
+--- a/Cargo.toml.orig
++++ b/Cargo.toml.orig
+@@ -19,7 +19,7 @@ uncased = ["uncased_", "phf_shared/uncased"]
+ ptrhash = ["phf_generator/ptrhash"]
+ 
+ [dependencies]
+-syn = { version = "2", features = ["full"] }
++syn = { version = "3", features = ["full"] }
+ quote = "1"
+ proc-macro2 = "1.0.95"
+ unicase_ = { package = "unicase", version = "2.4.0", optional = true }
