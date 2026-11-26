@@ -1,0 +1,11 @@
+{
+  "family": "cow-utils",
+  "packages": [
+    {
+      "name": "cow-utils",
+      "version": "0.1.3",
+      "checksum": "417bef24afe1460300965a25ff4a24b8b45ad011948302ec221e8a0a81eb2c79",
+      "patch": "patches/cow-utils.patch"
+    }
+  ]
+}
