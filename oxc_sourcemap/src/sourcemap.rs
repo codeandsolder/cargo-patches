@@ -89,8 +89,10 @@ impl<'a> SourceMap<'a> {
 
     /// Convert `SourceMap` to vlq sourcemap data url.
     pub fn to_data_url(&self) -> String {
-        let base_64_str = crate::encode_base64(self.to_json_string().as_bytes());
-        format!("data:application/json;charset=utf-8;base64,{base_64_str}")
+        crate::encode_base64(
+            self.to_json_string().as_bytes(),
+            "data:application/json;charset=utf-8;base64,",
+        )
     }
 
     /// Detach this `SourceMap` from its input buffer by allocating owned

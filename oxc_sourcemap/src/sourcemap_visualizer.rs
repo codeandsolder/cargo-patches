@@ -17,8 +17,7 @@ impl<'a, 'sm> SourcemapVisualizer<'a, 'sm> {
     pub fn get_url(&self) -> String {
         let result = self.sourcemap.to_json_string();
         let s = format!("{}\0{}{}\0{}", self.code.len(), self.code, result.len(), result);
-        let hash = crate::encode_base64(s.as_bytes());
-        format!("https://evanw.github.io/source-map-visualization/#{hash}")
+        crate::encode_base64(s.as_bytes(), "https://evanw.github.io/source-map-visualization/#")
     }
 
     pub fn get_text(&self) -> String {

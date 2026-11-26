@@ -23,16 +23,30 @@ pub use sourcemap_builder::SourceMapBuilder;
 pub use sourcemap_visualizer::SourcemapVisualizer;
 pub use token::{SourceViewToken, Token, TokenChunk};
 
-fn encode_base64(input: &[u8]) -> String {
+fn encode_base64(input: &[u8], prefix: &str) -> String {
     use base64::Engine;
-    #[cfg(any(target_arch = "x86_64", all(target_arch = "aarch64", target_feature = "neon")))]
+    let encoded_len = base64::encoded_len(input.len(), true).expect("base64 length overflow");
+    let capacity = prefix.len().checked_add(encoded_len).expect("base64 URL length overflow");
+    let mut output = String::with_capacity(capacity);
+    output.push_str(prefix);
+    #[cfg(any(
+        target_arch = "x86_64",
+        all(target_arch = "aarch64", target_feature = "neon"),
+        all(target_arch = "wasm32", target_feature = "simd128")
+    ))]
     {
-        static ENGINE: std::sync::LazyLock<base64::engine::Simd> =
-            std::sync::LazyLock::new(|| base64::engine::Simd::standard(base64::engine::general_purpose::PAD));
-        ENGINE.encode(input)
+        static ENGINE: std::sync::LazyLock<base64::engine::Simd> = std::sync::LazyLock::new(|| {
+            base64::engine::Simd::standard(base64::engine::general_purpose::PAD)
+        });
+        ENGINE.encode_string(input, &mut output);
     }
-    #[cfg(not(any(target_arch = "x86_64", all(target_arch = "aarch64", target_feature = "neon"))))]
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        all(target_arch = "aarch64", target_feature = "neon"),
+        all(target_arch = "wasm32", target_feature = "simd128")
+    )))]
     {
-        base64::engine::general_purpose::STANDARD.encode(input)
+        base64::engine::general_purpose::STANDARD.encode_string(input, &mut output);
     }
+    output
 }
