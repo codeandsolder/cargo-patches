@@ -53,7 +53,13 @@
       "name": "reqsign-google",
       "version": "3.3.0",
       "checksum": "a00ab10d7d395237b232233d0064a73c740ad81b1795527f887eeb02f122e6f4",
-      "patch": "patches/reqsign-google.patch"
+      "patch": "patches/reqsign-google.patch",
+      "exclude_files": [
+        {
+          "path": "testdata/testbucket_credential.json",
+          "checksum": "9ab5b0019b0eee58c04ddc4bd9ea18486b2cc1df0d291ab1ef9eb9b1068e5ac7"
+        }
+      ]
     }
   ]
 }

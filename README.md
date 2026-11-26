@@ -33,3 +33,10 @@ consumer together when changing btls. Do not manually edit the generated branch.
 
 The pure Rust SHA/HMAC helpers are retained; they are also used for non-RSA
 request signing and the consumer still needs hashing for other operations.
+
+Explicit `exclude_files` entries omit identified upstream files that are not
+required for the published package. Each entry specifies a package-relative
+path and SHA-256 of the exact upstream file. Import and publication both verify
+the file before removing it, so an upstream change requires review. Reqsign
+Google's unused testbucket credential fixture is omitted; no push-protection
+exception is needed.

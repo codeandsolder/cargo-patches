@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -11,6 +11,7 @@ const git = (cwd, ...args) => run(cwd, 'git', args);
 const die = (message) => { throw new Error(message); };
 const sha = /^[0-9a-f]{40}$/;
 const namePattern = /^[a-z][a-z0-9-]*$/;
+const packagePattern = /^[a-z][a-z0-9_-]*$/;
 const mode = process.argv[2];
 if (!['--check', '--publish'].includes(mode) || process.argv.length !== 3) die('Usage: node scripts/publish.mjs --check|--publish');
 const config = JSON.parse(readFileSync(join(root, 'packages.json'), 'utf8'));
@@ -43,7 +44,7 @@ try {
     for (const entry of readdirSync(staging)) if (entry !== '.git') rmSync(join(staging, entry), {recursive: true, force: true});
     const names = new Set();
     for (const pkg of packages) {
-      if (!namePattern.test(pkg.name) || names.has(pkg.name) || pkg.patch !== 'patches/' + pkg.name + '.patch') die('Invalid package: ' + JSON.stringify(pkg));
+      if (!packagePattern.test(pkg.name) || names.has(pkg.name) || pkg.patch !== 'patches/' + pkg.name + '.patch') die('Invalid package: ' + JSON.stringify(pkg));
       names.add(pkg.name);
       const source = join(scratch, 'source-' + family + '-' + pkg.name);
       mkdirSync(source);
@@ -78,6 +79,18 @@ try {
       }
       writeFileSync(manifest, contents);
       if (!new RegExp('^name = "' + pkg.name + '"$', 'm').test(contents)) die('Package name mismatch: ' + pkg.name);
+      // Exclude explicitly identified upstream fixtures from the published
+      // source, after verifying the exact bytes. Never copy them into Git.
+      for (const exclusion of pkg.exclude_files ?? []) {
+        const segments = exclusion.path.split('/');
+        if (isAbsolute(exclusion.path) || segments.some(part => !part || part === '.' || part === '..' || part.includes('\\')) || !/^[a-f0-9]{64}$/.test(exclusion.checksum)) die('Invalid exclusion: ' + pkg.name);
+        const file = resolve(source, exclusion.path);
+        if (relative(source, file) !== exclusion.path) die('Invalid exclusion path: ' + pkg.name);
+        const actual = createHash('sha256').update(readFileSync(file)).digest('hex');
+        if (actual !== exclusion.checksum) die('Excluded file checksum mismatch: ' + pkg.name);
+        rmSync(file);
+        console.log(pkg.name + ': excluded upstream fixture ' + exclusion.path);
+      }
       rmSync(join(source, '.git'), {recursive: true, force: true});
       // Workflows are source metadata in nested crates, never root workflows.
       cpSync(source, join(staging, pkg.name), {recursive: true, verbatimSymlinks: true});
