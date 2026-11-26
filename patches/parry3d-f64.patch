@@ -1,0 +1,24 @@
+diff --git a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -195,7 +195,7 @@
+ default-features = false
+ 
+ [dependencies.rstar]
+-version = "0.13.0"
++version = "0.14.0"
+ 
+ [dependencies.serde]
+ version = "1.0"
+diff --git a/Cargo.toml.orig b/Cargo.toml.orig
+--- a/Cargo.toml.orig
++++ b/Cargo.toml.orig
+@@ -78,7 +78,7 @@
+ spade = { workspace = true, optional = true }
+ rayon = { workspace = true, optional = true }
+ bytemuck = { workspace = true, optional = true }
+-rstar = { workspace = true }
++rstar = "0.14.0"
+ obj = { workspace = true, optional = true }
+ ena = { workspace = true, optional = true }
+ smallvec = { workspace = true }

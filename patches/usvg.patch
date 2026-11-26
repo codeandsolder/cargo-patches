@@ -1,0 +1,24 @@
+diff --git a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -71,7 +71,7 @@
+ 
+ [dependencies.flate2]
+ version = "1.1"
+-features = ["rust_backend"]
++features = ["zlib-rs"]
+ default-features = false
+ 
+ [dependencies.fontdb]
+diff --git a/Cargo.toml.orig b/Cargo.toml.orig
+--- a/Cargo.toml.orig
++++ b/Cargo.toml.orig
+@@ -28,7 +28,7 @@
+ 
+ # parser
+ data-url = "0.3" # for href parsing
+-flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] } # SVGZ decoding
++flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] } # SVGZ decoding
+ imagesize = "0.14.0" # raster images size detection
+ kurbo = "0.13.0" # Bezier curves utils
+ roxmltree = "0.21.1"

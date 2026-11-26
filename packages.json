@@ -131,5 +131,27 @@
       "checksum": "5aeb6f403d7a4911efb1e33402027fc44f29b5bf6def3effcc22d7bb75f2b747",
       "patch": "patches/plotters.patch"
     }
+  ],
+  "ksp-physics": [
+    {
+      "name": "parry3d-f64",
+      "version": "0.31.1",
+      "checksum": "ffb9e04261f1783d8f66f36767b2b73132a63c9b30b12a5ed47e1faa240f7591",
+      "patch": "patches/parry3d-f64.patch"
+    }
+  ],
+  "ksp-image-codecs": [
+    {
+      "name": "png",
+      "version": "0.18.1",
+      "checksum": "60769b8b31b2a9f263dae2776c37b1b28ae246943cf719eb6946a1db05128a61",
+      "patch": "patches/png.patch"
+    },
+    {
+      "name": "usvg",
+      "version": "0.47.0",
+      "checksum": "d46cf96c5f498d36b7a9693bc6a7075c0bb9303189d61b2249b0dc3d309c07de",
+      "patch": "patches/usvg.patch"
+    }
   ]
 }
