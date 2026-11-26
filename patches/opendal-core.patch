@@ -1,0 +1,31 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index d9114b5..cdfb33a 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -57,7 +57,7 @@ version = "1.0.100"
+ features = ["std"]
+ 
+ [dependencies.asyncband]
+-version = "0.7.1"
++version = "0.8"
+ features = [
+     "mutex",
+     "once-cell",
+@@ -81,7 +81,7 @@ default-features = false
+ version = "1.4"
+ 
+ [dependencies.jiff]
+-version = "0.2.28"
++version = "1"
+ features = ["serde"]
+ 
+ [dependencies.log]
+@@ -160,7 +160,7 @@ default-features = false
+ version = "1.1.0"
+ 
+ [target.'cfg(target_arch = "wasm32")'.dependencies.jiff]
+-version = "0.2.28"
++version = "1"
+ features = [
+     "serde",
+     "js",

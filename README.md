@@ -40,3 +40,13 @@ path and SHA-256 of the exact upstream file. Import and publication both verify
 the file before removing it, so an upstream change requires review. Reqsign
 Google's unused testbucket credential fixture is omitted; no push-protection
 exception is needed.
+
+## Utility version alignment
+
+Independent small patch families align Fuser with Nix 0.32, XZ and WASM
+split macros with SHA2 0.11, Leptos server utilities with Base64 0.23,
+and OpenDAL/Reqsign with Jiff 1 and Asyncband 0.8. These use the existing
+consumer versions, not newly selected dependency releases. The OpenDAL Redis
+patch changes only its pool dependency, not its TLS implementation. The
+families are source-pinned and can be retired as upstream releases align.
+Apply all relevant family overrides at the consumer workspace root.

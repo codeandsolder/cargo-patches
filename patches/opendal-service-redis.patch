@@ -1,0 +1,13 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 5d501db..b0f2c6a 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -40,7 +40,7 @@ name = "opendal_service_redis"
+ path = "src/lib.rs"
+ 
+ [dependencies.asyncband]
+-version = "0.7.1"
++version = "0.8"
+ features = ["pool"]
+ 
+ [dependencies.bytes]
