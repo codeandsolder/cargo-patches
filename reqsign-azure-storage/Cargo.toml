@@ -118,4 +118,4 @@ features = ["jwt"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies.btls]
 git = "https://github.com/codeandsolder/btls-fast.git"
-rev = "a4b12ba7391e03470626504fad60d887be790cfb"
+rev = "53c46285a85742dc8c3ab48fbb66613da6b4a297"

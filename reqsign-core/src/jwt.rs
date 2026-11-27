@@ -80,12 +80,8 @@ pub fn parse_rsa_private_key(private_key_pem: &[u8]) -> Result<PKey<Private>> {
     let rsa = key
         .rsa()
         .map_err(|e| Error::credential_invalid("invalid RSA private key").with_source(e))?;
-    if !rsa
-        .check_key()
-        .map_err(|e| Error::credential_invalid("invalid RSA private key").with_source(e))?
-    {
-        return Err(Error::credential_invalid("invalid RSA private key"));
-    }
+    rsa.check_key()
+        .map_err(|e| Error::credential_invalid("invalid RSA private key").with_source(e))?;
     Ok(key)
 }
 
@@ -97,7 +93,7 @@ pub fn sign_rs256(private_key: &PKeyRef<Private>, message: &[u8]) -> Result<Vec<
         return Err(Error::credential_invalid("private key is not RSA"));
     }
     let sign = || {
-        let mut signer = Signer::new(MessageDigest::sha256(), private_key)?;
+        let mut signer = Signer::new_oneshot(MessageDigest::sha256(), private_key)?;
         signer.set_rsa_padding(Padding::PKCS1)?;
         signer.sign_oneshot_to_vec(message)
     };
@@ -177,7 +173,7 @@ mod tests {
         let signature = URL_SAFE_NO_PAD
             .decode(parts[2])
             .map_err(|e| Error::unexpected("failed to decode JWT signature").with_source(e))?;
-        let mut verifier = Verifier::new(MessageDigest::sha256(), &private_key)
+        let mut verifier = Verifier::new_oneshot(MessageDigest::sha256(), &private_key)
             .map_err(|e| Error::unexpected("failed to initialize verifier").with_source(e))?;
         verifier
             .set_rsa_padding(Padding::PKCS1)
@@ -203,6 +199,13 @@ mod tests {
             sign_rs256(&key, b"reqsign RS256 reference vector").unwrap(),
             expected
         );
+        let mut verifier = Verifier::new_oneshot(MessageDigest::sha256(), &key).unwrap();
+        verifier.set_rsa_padding(Padding::PKCS1).unwrap();
+        assert!(
+            !verifier
+                .verify_oneshot(&expected, b"altered reference vector")
+                .unwrap()
+        );
     }
 
     #[test]
@@ -225,5 +228,11 @@ mod tests {
         der.push(0);
         let trailing = pem::encode(&pem::Pem::new("PRIVATE KEY", der));
         assert!(parse_rsa_private_key(trailing.as_bytes()).is_err());
+        // A syntactically valid PKCS#1 key with an inconsistent CRT
+        // coefficient must fail native key validation, not reach signing.
+        let mut inconsistent = key.rsa().unwrap().private_key_to_der().unwrap();
+        *inconsistent.last_mut().unwrap() ^= 1;
+        let inconsistent = pem::encode(&pem::Pem::new("RSA PRIVATE KEY", inconsistent));
+        assert!(parse_rsa_private_key(inconsistent.as_bytes()).is_err());
     }
 }
