@@ -23,7 +23,7 @@ index 532286a..1f87afb 100644
 -]
 +[target.'cfg(not(target_arch = "wasm32"))'.dependencies.btls]
 +git = "https://github.com/codeandsolder/btls-fast.git"
-+rev = "a4b12ba7391e03470626504fad60d887be790cfb"
++rev = "53c46285a85742dc8c3ab48fbb66613da6b4a297"
 diff --git a/src/provide_credential/client_certificate.rs b/src/provide_credential/client_certificate.rs
 index 5cd98cc..13f4ffd 100644
 --- a/src/provide_credential/client_certificate.rs

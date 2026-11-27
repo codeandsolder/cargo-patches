@@ -1,0 +1,8 @@
+[workspace]
+members = ["reqsign-core", "reqsign-google", "reqsign-azure-storage"]
+resolver = "3"
+
+[patch.crates-io]
+reqsign-core = { path = "reqsign-core" }
+reqsign-google = { path = "reqsign-google" }
+reqsign-azure-storage = { path = "reqsign-azure-storage" }

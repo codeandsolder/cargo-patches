@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -104,6 +104,16 @@ try {
         const manifest = join(staging, pkg.name, 'Cargo.toml');
         const metadata = JSON.parse(run(staging, 'cargo', ['metadata', '--no-deps', '--format-version', '1', '--manifest-path', manifest]));
         if (!metadata.packages.some(p => p.name === pkg.name && p.manifest_path === manifest)) die('Cargo package not discoverable: ' + pkg.name);
+      }
+      const validation = join(root, 'validation', family);
+      if (existsSync(validation)) {
+        for (const file of ['Cargo.toml', 'Cargo.lock']) {
+          const destination = join(staging, file);
+          if (existsSync(destination)) die('Validation workspace would overwrite imported content: ' + family);
+          cpSync(join(validation, file), destination);
+        }
+        console.log(family + ': running checked family validation');
+        execFileSync('bash', [join(validation, 'test.sh')], {cwd: staging, stdio: 'inherit'});
       }
       continue;
     }
