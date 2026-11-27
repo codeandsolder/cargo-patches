@@ -33,7 +33,7 @@ index 24afc78..2efe721 100644
 -]
 +[dev-dependencies.btls]
 +git = "https://github.com/codeandsolder/btls-fast.git"
-+rev = "a4b12ba7391e03470626504fad60d887be790cfb"
++rev = "61c9822b9544fb8782cdf543a94e89af53574db5"
  
  [dependencies.serde]
  version = "1"
