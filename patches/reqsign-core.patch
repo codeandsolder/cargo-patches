@@ -40,12 +40,12 @@ index 94cd1c9..d737eed 100644
 -]
 +[dependencies.btls]
 +git = "https://github.com/codeandsolder/btls-fast.git"
-+rev = "61c9822b9544fb8782cdf543a94e89af53574db5"
++rev = "5b4b837ae5ee7267dd455b5ace3a4c16945e17b8"
  optional = true
  
  [dependencies.serde]
 diff --git a/src/jwt.rs b/src/jwt.rs
-index 413ff8f..d4dafd4 100644
+index 413ff8f..a19b92a 100644
 --- a/src/jwt.rs
 +++ b/src/jwt.rs
 @@ -19,12 +19,12 @@
@@ -76,7 +76,7 @@ index 413ff8f..d4dafd4 100644
  where
      H: Serialize,
      C: Serialize,
-@@ -42,28 +42,66 @@ where
+@@ -42,28 +42,62 @@ where
      let encoded_claims = encode_json(claims)?;
      let signing_input = format!("{encoded_header}.{encoded_claims}");
  
@@ -128,12 +128,8 @@ index 413ff8f..d4dafd4 100644
 +    let rsa = key
 +        .rsa()
 +        .map_err(|e| Error::credential_invalid("invalid RSA private key").with_source(e))?;
-+    if !rsa
-+        .check_key()
-+        .map_err(|e| Error::credential_invalid("invalid RSA private key").with_source(e))?
-+    {
-+        return Err(Error::credential_invalid("invalid RSA private key"));
-+    }
++    rsa.check_key()
++        .map_err(|e| Error::credential_invalid("invalid RSA private key").with_source(e))?;
 +    Ok(key)
 +}
  
@@ -146,7 +142,7 @@ index 413ff8f..d4dafd4 100644
 +        return Err(Error::credential_invalid("private key is not RSA"));
 +    }
 +    let sign = || {
-+        let mut signer = Signer::new(MessageDigest::sha256(), private_key)?;
++        let mut signer = Signer::new_oneshot(MessageDigest::sha256(), private_key)?;
 +        signer.set_rsa_padding(Padding::PKCS1)?;
 +        signer.sign_oneshot_to_vec(message)
 +    };
@@ -154,7 +150,7 @@ index 413ff8f..d4dafd4 100644
  }
  
  fn encode_json<T>(value: &T) -> Result<String>
-@@ -79,9 +117,7 @@ where
+@@ -79,9 +113,7 @@ where
  mod tests {
      use super::*;
      use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -165,7 +161,7 @@ index 413ff8f..d4dafd4 100644
      use serde_json::json;
  
      #[derive(Serialize)]
-@@ -101,8 +137,8 @@ mod tests {
+@@ -101,8 +133,8 @@ mod tests {
  
      #[test]
      fn encode_rs256_keeps_jws_shape_and_verifiable_signature() -> Result<()> {
@@ -176,7 +172,7 @@ index 413ff8f..d4dafd4 100644
              .map_err(|e| Error::unexpected("failed to generate test RSA key").with_source(e))?;
  
          let jwt = encode_rs256(
-@@ -141,13 +177,53 @@ mod tests {
+@@ -141,13 +173,53 @@ mod tests {
          let signature = URL_SAFE_NO_PAD
              .decode(parts[2])
              .map_err(|e| Error::unexpected("failed to decode JWT signature").with_source(e))?;
@@ -186,7 +182,7 @@ index 413ff8f..d4dafd4 100644
 -        verifying_key
 -            .verify(format!("{}.{}", parts[0], parts[1]).as_bytes(), &signature)
 -            .map_err(|e| Error::unexpected("failed to verify JWT signature").with_source(e))?;
-+        let mut verifier = Verifier::new(MessageDigest::sha256(), &private_key)
++        let mut verifier = Verifier::new_oneshot(MessageDigest::sha256(), &private_key)
 +            .map_err(|e| Error::unexpected("failed to initialize verifier").with_source(e))?;
 +        verifier
 +            .set_rsa_padding(Padding::PKCS1)
