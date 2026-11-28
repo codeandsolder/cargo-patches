@@ -20,3 +20,41 @@
  # Pure-Rust Zstandard, so the crate builds with no C toolchain; see `src/decode/zstd.rs` for what
  # `ruzstd` leaves unchecked that libzstd checks, and this crate therefore checks itself.
  ruzstd.workspace = true
+--- a/src/dialect.rs
++++ b/src/dialect.rs
+@@ -770,7 +770,7 @@
+     #[test]
+     fn dialect_id_matches_the_shared_conformance_corpus() {
+         let cases: DialectIdConformance =
+-            toml::from_str(include_str!("../../../docs/dialect-id-conformance.toml")).unwrap();
++            toml::from_str(include_str!("../fixtures/dialect-id-conformance.toml")).unwrap();
+         for id in cases.valid {
+             let admitted =
+                 DialectId::parse(id.clone()).unwrap_or_else(|_| panic!("valid dialect id {id:?}"));
+--- /dev/null
++++ b/fixtures/dialect-id-conformance.toml
+@@ -0,0 +1,24 @@
++# SPDX-License-Identifier: Apache-2.0
++# Shared examples for the Rust DialectId validator and the registry checker.
++
++valid = [
++  "demo:one",
++  "demo2:part9",
++  "iges:5.3-fixed-ascii",
++  "f3d:manifest-3-2-0-0",
++  "rhino:archive-80",
++]
++
++invalid = [
++  "",
++  "demo",
++  ":one",
++  "demo:",
++  "demo:one:two",
++  "Demo:one",
++  "demo:One",
++  "demo:one_two",
++  "demo-name:one",
++  "demo:-one",
++  "demo:one-",
++]
