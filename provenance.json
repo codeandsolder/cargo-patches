@@ -1,0 +1,11 @@
+{
+  "family": "brush-parser",
+  "packages": [
+    {
+      "name": "brush-parser",
+      "version": "0.4.0",
+      "checksum": "9f64b19efc02f0dd6cac1d462e20a1098f425f09cb13624efbb1b7d63f061735",
+      "patch": "patches/brush-parser.patch"
+    }
+  ]
+}
