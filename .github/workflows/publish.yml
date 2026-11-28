@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
         with:
-          toolchain: nightly-2026-11-26
+          toolchain: nightly-2026-11-28
       - name: Install native validation tools
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends binutils ripgrep jq clang cmake
       - uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@f22d2e61394d5b0b79314d24d16523eed509d496 # main
