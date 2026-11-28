@@ -202,8 +202,8 @@
 --- /dev/null
 +++ b/src/test_support/mod.rs
 @@ -0,0 +1,2 @@
-+pub mod bytes;
-+pub mod zip_fixture;
++pub(crate) mod bytes;
++pub(crate) mod zip_fixture;
 --- /dev/null
 +++ b/src/test_support/zip_fixture.rs
 @@ -0,0 +1,371 @@
@@ -222,30 +222,30 @@
 +
 +/// One entry, with its payload already in the form the compression method stores.
 +#[derive(Debug, Clone)]
-+pub struct RawEntry {
++pub(crate) struct RawEntry {
 +    /// Entry name, written unflagged, so it must be ASCII (bit 11 is left clear).
-+    pub name: String,
++    pub(crate) name: String,
 +    /// ZIP compression method number: 0 stored, 8 deflate, 93 Zstandard, 99 AE-x.
-+    pub method: u16,
++    pub(crate) method: u16,
 +    /// The bytes as stored in the archive, already compressed by `method`.
-+    pub payload: Vec<u8>,
++    pub(crate) payload: Vec<u8>,
 +    /// Size of the payload after decompression.
-+    pub uncompressed_size: u32,
++    pub(crate) uncompressed_size: u32,
 +    /// CRC-32 of the payload after decompression.
-+    pub crc32: u32,
++    pub(crate) crc32: u32,
 +    /// General-purpose bit flag.  Bit 0 is the encrypted bit; a reader must refuse such an
 +    /// entry, and something has to be able to build one for that refusal to have a fixture.
-+    pub flags: u16,
++    pub(crate) flags: u16,
 +    /// Extra field, written into BOTH headers.  The 0x9901 AE-x record lives here: it names the
 +    /// real compression method for an entry whose method field says 99, which is how an
 +    /// encrypted entry can present with the encrypted bit CLEAR.
-+    pub extra: Vec<u8>,
++    pub(crate) extra: Vec<u8>,
 +}
 +
 +impl RawEntry {
 +    /// Builds a `Stored` (method 0) entry from its plaintext.
 +    #[must_use]
-+    pub fn stored(name: &str, plain: &[u8]) -> Self {
++    pub(crate) fn stored(name: &str, plain: &[u8]) -> Self {
 +        Self {
 +            name: name.to_owned(),
 +            method: STORED,
@@ -259,7 +259,7 @@
 +
 +    /// Builds an entry from an already-compressed payload and the plaintext it expands to.
 +    #[must_use]
-+    pub fn compressed(name: &str, method: u16, payload: &[u8], plain: &[u8]) -> Self {
++    pub(crate) fn compressed(name: &str, method: u16, payload: &[u8], plain: &[u8]) -> Self {
 +        Self {
 +            name: name.to_owned(),
 +            method,
@@ -273,7 +273,7 @@
 +
 +    /// Sets the general-purpose bit flag (bit 0 is "encrypted").
 +    #[must_use]
-+    pub fn with_flags(mut self, flags: u16) -> Self {
++    pub(crate) fn with_flags(mut self, flags: u16) -> Self {
 +        self.flags = flags;
 +        self
 +    }
@@ -286,7 +286,7 @@
 +    /// rewrites `compression_method` from the extra field, so the entry then presents as ordinary
 +    /// Stored or Deflate.  A reader that takes the method from the central record sees 99.
 +    #[must_use]
-+    pub fn aes_without_the_encrypted_bit(mut self, inner_method: u16) -> Self {
++    pub(crate) fn aes_without_the_encrypted_bit(mut self, inner_method: u16) -> Self {
 +        self.extra = Vec::new();
 +        self.extra.extend_from_slice(&0x9901_u16.to_le_bytes()); // header id
 +        self.extra.extend_from_slice(&7_u16.to_le_bytes()); // data size
@@ -300,15 +300,15 @@
 +}
 +
 +/// ZIP compression method number for a stored entry.
-+pub const STORED: u16 = 0;
++pub(crate) const STORED: u16 = 0;
 +/// ZIP compression method number for a raw-DEFLATE entry.
-+pub const DEFLATE: u16 = 8;
++pub(crate) const DEFLATE: u16 = 8;
 +/// ZIP compression method number for a Zstandard entry (APPNOTE 6.3.7).
-+pub const ZSTD: u16 = 93;
++pub(crate) const ZSTD: u16 = 93;
 +
 +/// Lays the entries out as one ZIP archive: local headers, then the central directory, then EOCD.
 +#[must_use]
-+pub fn archive(entries: &[RawEntry]) -> Vec<u8> {
++pub(crate) fn archive(entries: &[RawEntry]) -> Vec<u8> {
 +    let mut out = Vec::new();
 +    let mut offsets = Vec::with_capacity(entries.len());
 +    for entry in entries {
@@ -391,14 +391,14 @@
 +/// two implementations disagreeing about the format.  405 bytes, real compressed blocks (the
 +/// plaintext is 19 968), frame-descriptor bit 2 set, so decoding it also exercises the xxhash64
 +/// content checksum.
-+pub const ZSTD_GOLDEN_FRAME: &[u8] = include_bytes!("../fixtures/zstd-golden.zst");
++pub(crate) const ZSTD_GOLDEN_FRAME: &[u8] = include_bytes!("../fixtures/zstd-golden.zst");
 +
 +/// The plaintext [`ZSTD_GOLDEN_FRAME`] decodes to, generated rather than stored.
 +///
 +/// Generating it here rather than committing it beside the frame is what makes the comparison
 +/// worth making: the expected bytes and the frame do not come from one file.
 +#[must_use]
-+pub fn zstd_golden_plaintext() -> Vec<u8> {
++pub(crate) fn zstd_golden_plaintext() -> Vec<u8> {
 +    let mut out = Vec::with_capacity(512 * 39);
 +    for line in 0..512 {
 +        out.extend_from_slice(format!("cadmpeg zstd interop fixture line {line:04}\n").as_bytes());
@@ -415,7 +415,7 @@
 +/// therefore inert on the input it will actually meet, and the arm that skips it needs a fixture
 +/// of its own.  `zstd -19 --no-check`, v1.5.7, 2026-08-22; 401 bytes, frame-descriptor bit 2
 +/// clear.
-+pub const ZSTD_GOLDEN_NOCHECK_FRAME: &[u8] = include_bytes!("../fixtures/zstd-golden-nocheck.zst");
++pub(crate) const ZSTD_GOLDEN_NOCHECK_FRAME: &[u8] = include_bytes!("../fixtures/zstd-golden-nocheck.zst");
 +
 +/// A larger Zstandard frame from the reference implementation: 17 876 bytes over a 200 000-byte
 +/// plaintext.
@@ -425,14 +425,14 @@
 +/// sequence is `16384, 16384, 3584, 0`, so its only short read is the last one; this one spans
 +/// thirteen reads.  Written by the Zstandard CLI v1.5.7 (`zstd -19 --check`) on 2026-08-22, so
 +/// the large-payload test is fed by a reference frame too and is not a round trip.
-+pub const ZSTD_GOLDEN_LARGE_FRAME: &[u8] = include_bytes!("../fixtures/zstd-golden-large.zst");
++pub(crate) const ZSTD_GOLDEN_LARGE_FRAME: &[u8] = include_bytes!("../fixtures/zstd-golden-large.zst");
 +
 +/// The plaintext [`ZSTD_GOLDEN_LARGE_FRAME`] decodes to, generated rather than stored.
 +///
 +/// Deliberately varied rather than a run of one byte: a uniform payload compresses to almost
 +/// nothing and would not exercise multi-block decoding on the way out.
 +#[must_use]
-+pub fn zstd_golden_large_plaintext() -> Vec<u8> {
++pub(crate) fn zstd_golden_large_plaintext() -> Vec<u8> {
 +    let mut out = Vec::with_capacity(200_000);
 +    for line in 0_u32..200_000 / 40 {
 +        let salt = (u64::from(line) * 2_654_435_761) & 0xffff;
@@ -453,7 +453,7 @@
 +/// only the `ZSTD_GOLDEN_*` frames come from the reference implementation.  The Zstandard CLI
 +/// v1.5.5 decodes this function's output for 0, 8 and 300 000 bytes (2026-10-12).
 +#[must_use]
-+pub fn zstd_stored_frame(plain: &[u8]) -> Vec<u8> {
++pub(crate) fn zstd_stored_frame(plain: &[u8]) -> Vec<u8> {
 +    let mut out = vec![0x28, 0xb5, 0x2f, 0xfd];
 +    out.push(0xe0); // single segment, eight-byte Frame_Content_Size, no checksum, no dictionary
 +    out.extend_from_slice(
@@ -474,7 +474,7 @@
 +/// fits the frame's block maximum. Laid out by hand from RFC 8878, like
 +/// [`zstd_stored_frame`].
 +#[must_use]
-+pub fn zstd_streamed_frame(window_log: u8, plain: &[u8]) -> Vec<u8> {
++pub(crate) fn zstd_streamed_frame(window_log: u8, plain: &[u8]) -> Vec<u8> {
 +    assert!((17..=41).contains(&window_log), "windowLog {window_log}");
 +    let mut out = vec![0x28, 0xb5, 0x2f, 0xfd];
 +    out.push(0x00); // no Frame_Content_Size, not single segment, no checksum, no dictionary
@@ -500,7 +500,7 @@
 +
 +/// CRC-32 (IEEE, the ZIP polynomial) of `bytes`, computed here so this crate needs no dependency.
 +#[must_use]
-+pub fn crc32(bytes: &[u8]) -> u32 {
++pub(crate) fn crc32(bytes: &[u8]) -> u32 {
 +    let mut crc = 0xFFFF_FFFF_u32;
 +    for byte in bytes {
 +        crc ^= u32::from(*byte);
@@ -588,17 +588,17 @@
 +//! widths at an absolute offset. They are declared once here.
 +
 +/// Write a little-endian `u16` at `offset`.
-+pub fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
++pub(crate) fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
 +    bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
 +}
 +
 +/// Write a little-endian `u32` at `offset`.
-+pub fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
++pub(crate) fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
 +    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
 +}
 +
 +/// Write a little-endian `u64` at `offset`.
-+pub fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
++pub(crate) fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
 +    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 +}
 diff --git a/src/fixtures/zstd-golden.zst b/src/fixtures/zstd-golden.zst
