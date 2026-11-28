@@ -1,0 +1,19 @@
+[package]
+name = "imaging-atlas-validation"
+version = "0.1.0"
+edition = "2024"
+publish = false
+[workspace]
+[dependencies]
+imaging = { path = "../staging/imaging/imaging", features = ["std"] }
+imaging_vello_hybrid = { path = "../staging/imaging/imaging_vello_hybrid" }
+kurbo = "0.13.1"
+peniko = "0.6.1"
+pollster = "0.4.0"
+wgpu = "30.0.2"
+[patch.crates-io]
+glifo = { path = "../staging/glifo" }
+vello_gpu = { path = "../staging/vello_gpu" }
+[[test]]
+name = "glyph_atlas"
+path = "../staging/imaging/imaging_vello_hybrid/tests/glyph_atlas.rs"
