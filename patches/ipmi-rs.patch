@@ -1,10 +1,10 @@
 diff --git a/Cargo.toml b/Cargo.toml
-index 14fd015..618a788 100644
+index 14fd015..b7ad4f2 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
 @@ -36,11 +36,11 @@ license = "MIT OR Apache-2.0"
  repository = "https://github.com/datdenkikniet/ipmi-rs"
- 
+
  [features]
 -default = [
 -    "unix-file",
@@ -12,11 +12,11 @@ index 14fd015..618a788 100644
 -]
 -unix-file = ["nix"]
 +default = ["unix-file", "rmcp", "md5", "timestamp-format"]
-+unix-file = ["dep:nix"]
++unix-file = ["dep:rustix"]
 +rmcp = ["dep:aes", "dep:cbc", "dep:getrandom", "dep:hmac", "dep:rand", "dep:sha1"]
 +md5 = ["rmcp", "dep:md5"]
 +timestamp-format = ["ipmi-rs-core/time"]
- 
+
  [lib]
  name = "ipmi_rs"
 @@ -49,55 +49,59 @@ path = "src/lib.rs"
@@ -25,96 +25,599 @@ index 14fd015..618a788 100644
  path = "examples/common.rs"
 -required-features = ["unix-file"]
 +required-features = ["unix-file", "rmcp"]
- 
+
  [[example]]
  name = "get-info"
  path = "examples/get-info.rs"
 -required-features = ["unix-file"]
 +required-features = ["unix-file", "rmcp"]
- 
+
  [[example]]
  name = "ipmi-channels"
  path = "examples/ipmi-channels.rs"
 -required-features = ["unix-file"]
 +required-features = ["unix-file", "rmcp"]
- 
+
  [[example]]
  name = "ipmi-lan-config"
  path = "examples/ipmi-lan-config/main.rs"
 -required-features = ["unix-file"]
 +required-features = ["unix-file", "rmcp"]
- 
+
  [[example]]
  name = "raw"
  path = "examples/raw.rs"
 -required-features = ["unix-file"]
 +required-features = ["unix-file", "rmcp"]
- 
+
  [[example]]
  name = "sel"
  path = "examples/sel.rs"
 -required-features = ["unix-file"]
 +required-features = ["unix-file", "rmcp"]
- 
+
  [[example]]
  name = "sensors-of-type"
  path = "examples/sensors-of-type.rs"
 -required-features = ["unix-file"]
 +required-features = ["unix-file", "rmcp"]
- 
+
  [dependencies.aes]
  version = "0.8.4"
 -
 -[dependencies.bitflags]
 -version = "1.3"
 +optional = true
- 
+
  [dependencies.cbc]
  version = "0.1.2"
 +optional = true
- 
+
  [dependencies.getrandom]
  version = "0.4.2"
 +optional = true
- 
+
  [dependencies.hmac]
  version = "0.12.1"
 +optional = true
- 
+
  [dependencies.ipmi-rs-core]
  version = "0.6.0"
 +path = "../ipmi-rs-core"
 +default-features = false
 +features = ["log"]
- 
+
  [dependencies.log]
  version = "0.4"
-@@ -107,7 +111,7 @@ version = "0.8"
+@@ -106,23 +110,18 @@ version = "0.4"
+ version = "0.8"
  optional = true
- 
- [dependencies.nix]
+
+-[dependencies.nix]
 -version = "0.30"
-+version = "0.31"
- features = [
-     "ioctl",
-     "poll",
-@@ -115,14 +119,13 @@ features = [
- optional = true
- default-features = false
- 
+-features = [
+-    "ioctl",
+-    "poll",
+-]
+-optional = true
+-default-features = false
+-
 -[dependencies.nonmax]
 -version = "0.5"
 -
  [dependencies.rand]
  version = "0.8.5"
 +optional = true
- 
++
++[dependencies.rustix]
++version = "1.1"
++features = ["event"]
++optional = true
+
  [dependencies.sha1]
  version = "0.10.6"
 +optional = true
- 
+
  [dev-dependencies.clap]
  version = "4.3"
+diff --git a/src/file.rs b/src/file.rs
+index 5733c47..0b68d84 100644
+--- a/src/file.rs
++++ b/src/file.rs
+@@ -1,14 +1,9 @@
+ use std::fmt::{Display, Formatter};
+-use std::{
+-    ffi::c_int,
+-    io,
+-    os::fd::{AsFd, AsRawFd},
+-    time::Duration,
+-};
++use std::{ffi::c_long, io, os::fd::AsFd, time::Duration};
+
+ use ipmi_rs_core::connection::NetFn;
+-use nix::errno::Errno;
+-use nix::poll::{PollFd, PollFlags};
++use rustix::event::{poll, PollFd, PollFlags, Timespec};
++use rustix::io::Errno;
+
+ use crate::connection::{
+     Address, IpmiConnection, Message, Request, RequestTargetAddress, Response,
+@@ -16,7 +11,7 @@ use crate::connection::{
+
+ #[repr(C)]
+ #[derive(Debug)]
+-pub struct IpmiMessage {
++struct IpmiMessage {
+     netfn: u8,
+     cmd: u8,
+     data_len: u16,
+@@ -24,92 +19,137 @@ pub struct IpmiMessage {
+ }
+
+ impl IpmiMessage {
+-    fn data(&self) -> &[u8] {
+-        unsafe { core::slice::from_raw_parts(self.data, self.data_len as usize) }
+-    }
+-}
+-
+-impl IpmiMessage {
+-    fn log(&self, level: log::Level) {
++    fn log(&self, level: log::Level, data: &[u8]) {
+         log::log!(level, "  NetFn      = 0x{:02X}", self.netfn);
+         log::log!(level, "  Command    = 0x{:02X}", self.cmd);
+         log::log!(level, "  Data len   = {}", self.data_len);
+-        if self.data_len > 0 {
+-            log::log!(level, "  Data       = {:02X?}", self.data());
++        if !data.is_empty() {
++            log::log!(level, "  Data       = {:02X?}", data);
+         }
+     }
+ }
+
+ #[repr(C)]
+ #[derive(Debug)]
+-pub struct IpmiRequest {
++struct IpmiRequest {
+     addr: *mut u8,
+     addr_len: u32,
+-    msg_id: i64,
++    msg_id: c_long,
+     message: IpmiMessage,
+ }
+
+ impl IpmiRequest {
+-    pub fn log(&self, level: log::Level) {
++    fn log(&self, level: log::Level, data: &[u8]) {
+         log::log!(level, "  Message ID = 0x{:02X}", self.msg_id);
+-        self.message.log(level);
++        self.message.log(level, data);
+     }
+ }
+
+ #[repr(C)]
+ #[derive(Debug)]
+-pub struct IpmiRecv {
++struct IpmiRecv {
+     recv_type: i32,
+     addr: *mut u8,
+     addr_len: u32,
+-    msg_id: i64,
++    msg_id: c_long,
+     message: IpmiMessage,
+ }
+
+ impl IpmiRecv {
+-    fn log(&self, level: log::Level) {
++    fn log(&self, level: log::Level, data: &[u8]) {
+         log::log!(level, "  Type       = 0x{:02X}", self.recv_type);
+         log::log!(level, "  Message ID = 0x{:02X}", self.msg_id);
+-        self.message.log(level);
++        self.message.log(level, data);
+     }
+ }
+
+-#[derive(Clone, Copy, Debug)]
+-pub enum CreateResponseError {
+-    NotAResponse,
+-    NotEnoughData,
+-    InvalidCmd,
+-}
+-
+-impl TryFrom<IpmiRecv> for Response {
+-    type Error = CreateResponseError;
+-
+-    fn try_from(value: IpmiRecv) -> Result<Self, Self::Error> {
+-        let (netfn, cmd) = (value.message.netfn, value.message.cmd);
+-
+-        let netfn_parsed = NetFn::from(netfn);
+-
+-        if netfn_parsed.response_value() == netfn {
+-            let message = Message::new_raw(netfn, cmd, value.message.data().to_vec());
+-            let response =
+-                Response::new(message, value.msg_id).ok_or(CreateResponseError::NotEnoughData)?;
+-            Ok(response)
+-        } else {
+-            Err(CreateResponseError::NotAResponse)
++impl IpmiRecv {
++    fn into_response(self, buffer: &[u8]) -> io::Result<Response> {
++        let data = buffer
++            .get(..usize::from(self.message.data_len))
++            .ok_or_else(|| {
++                io::Error::new(
++                    io::ErrorKind::InvalidData,
++                    "IPMI response length exceeds buffer",
++                )
++            })?;
++        self.log(log::Level::Trace, data);
++        let (netfn, cmd) = (self.message.netfn, self.message.cmd);
++        if NetFn::from(netfn).response_value() != netfn {
++            return Err(io::Error::new(
++                io::ErrorKind::InvalidData,
++                "not an IPMI response",
++            ));
+         }
++        let message = Message::new_raw(netfn, cmd, data.to_vec());
++        Response::new(message, i64::from(self.msg_id)).ok_or_else(|| {
++            io::Error::new(
++                io::ErrorKind::InvalidData,
++                "IPMI response lacks completion code",
++            )
++        })
+     }
+ }
+
+ mod ioctl {
++    use super::{IpmiRecv, IpmiRequest};
++    use rustix::io::Result;
++    use rustix::ioctl::{self, opcode, Getter, Opcode, Setter, Updater};
++    use std::os::fd::AsFd;
++
+     const IPMI_IOC_MAGIC: u8 = b'i';
++    pub(super) const RECEIVE: Opcode = opcode::read_write::<IpmiRecv>(IPMI_IOC_MAGIC, 11);
++    // Linux's UAPI encodes SEND_COMMAND as _IOR despite reading the user buffer.
++    pub(super) const SEND: Opcode = opcode::read::<IpmiRequest>(IPMI_IOC_MAGIC, 13);
++    pub(super) const GET_ADDRESS: Opcode = opcode::read::<u32>(IPMI_IOC_MAGIC, 18);
++
++    pub(super) fn get_address(fd: impl AsFd) -> Result<u32> {
++        // SAFETY: GET_MY_ADDRESS writes one unsigned int on success.
++        unsafe { ioctl::ioctl(fd, Getter::<GET_ADDRESS, u32>::new()) }
++    }
+
+-    use nix::{ioctl_read, ioctl_readwrite};
++    /// Both pointers in `request` must remain valid for the specified lengths
++    /// until the synchronous kernel call returns. The driver reads both buffers.
++    pub(super) unsafe fn send(fd: impl AsFd, request: IpmiRequest) -> Result<()> {
++        // SAFETY: the caller supplies the live buffers described above.
++        unsafe { ioctl::ioctl(fd, Setter::<SEND, IpmiRequest>::new(request)) }
++    }
+
+-    use super::{IpmiRecv, IpmiRequest};
++    /// Both output buffers must be writable and valid for their supplied sizes
++    /// until the synchronous kernel call returns.
++    pub(super) unsafe fn receive(fd: impl AsFd, recv: &mut IpmiRecv) -> Result<()> {
++        // SAFETY: the caller supplies both live, exclusive output buffers.
++        unsafe { ioctl::ioctl(fd, Updater::<RECEIVE, IpmiRecv>::new(recv)) }
++    }
++}
+
+-    ioctl_readwrite!(ipmi_recv_msg_trunc, IPMI_IOC_MAGIC, 11, IpmiRecv);
+-    ioctl_read!(ipmi_send_request, IPMI_IOC_MAGIC, 13, IpmiRequest);
+-    ioctl_read!(ipmi_get_my_address, IPMI_IOC_MAGIC, 18, u32);
++// Linux UAPI's generic address, large enough for every returned address type.
++#[repr(C)]
++struct IpmiReceiveAddr {
++    ty: i32,
++    channel: i16,
++    data: [u8; 32],
++}
++
++fn wait_readable(fd: impl AsFd, timeout: Duration) -> io::Result<()> {
++    let timeout = Timespec::try_from(timeout).map_err(|_| {
++        io::Error::new(
++            io::ErrorKind::InvalidInput,
++            "IPMI timeout exceeds timespec range",
++        )
++    })?;
++    let mut fds = [PollFd::new(&fd, PollFlags::IN)];
++    if poll(&mut fds, Some(&timeout))? == 0 {
++        return Err(Errno::AGAIN.into());
++    }
++    let events = fds[0].revents();
++    if events.contains(PollFlags::IN) {
++        Ok(())
++    } else {
++        Err(io::Error::other(format!(
++            "IPMI device not readable: {events:?}"
++        )))
++    }
+ }
+
+ #[repr(C)]
+@@ -209,19 +249,15 @@ impl IpmiSysIfaceAddr {
+ pub struct File {
+     inner: std::fs::File,
+     recv_timeout: Duration,
+-    seq: i64,
++    seq: c_long,
+     my_addr: Address,
+ }
+
+ impl File {
+-    fn fd(&mut self) -> c_int {
+-        self.inner.as_raw_fd()
+-    }
+-
+     pub fn new(path: impl AsRef<std::path::Path>, recv_timeout: Duration) -> io::Result<Self> {
+-        let mut inner = std::fs::File::open(path)?;
++        let inner = std::fs::File::open(path)?;
+
+-        let my_addr = match Self::load_my_address_from_file(&mut inner) {
++        let my_addr = match Self::load_my_address_from_file(&inner) {
+             Ok(addr) => addr,
+             Err(e) => {
+                 log::warn!("Failed to get local address, defaulting to 0x20: {:?}", e);
+@@ -237,9 +273,8 @@ impl File {
+         })
+     }
+
+-    fn load_my_address_from_file(file: &mut std::fs::File) -> io::Result<Address> {
+-        let mut my_addr: u32 = 8;
+-        unsafe { ioctl::ipmi_get_my_address(file.as_raw_fd(), std::ptr::addr_of_mut!(my_addr))? };
++    fn load_my_address_from_file(file: &std::fs::File) -> io::Result<Address> {
++        let my_addr = ioctl::get_address(file)?;
+         if let Ok(addr) = u8::try_from(my_addr) {
+             Ok(Address(addr))
+         } else {
+@@ -264,43 +299,39 @@ impl IpmiConnection for File {
+         }
+         .into();
+
+-        self.seq += 1;
+-
+         let netfn = request.netfn_raw();
+         let cmd = request.cmd();
+-        let seq = self.seq;
+         let data = request.data_mut();
+
+-        let data_len = data.len() as u16;
+-        let ptr = data.as_mut_ptr();
++        let data_len = u16::try_from(data.len()).map_err(|_| {
++            io::Error::new(
++                io::ErrorKind::InvalidInput,
++                "IPMI request exceeds u16 length",
++            )
++        })?;
++        self.seq = self.seq.wrapping_add(1);
++        let seq = self.seq;
+
+         log::debug!("Sending request (netfn: 0x{netfn:02X}, cmd: 0x{cmd:02X}) to {addr}");
+         let ipmi_message = IpmiMessage {
+             netfn,
+             cmd,
+             data_len,
+-            data: ptr,
++            data: std::ptr::null_mut(),
+         };
++        let addr_len = addr.size();
+         let mut request = IpmiRequest {
+             addr: addr.ptr(),
+-            addr_len: addr.size(),
++            addr_len,
+             msg_id: seq,
+             message: ipmi_message,
+         };
+
+-        request.log(log::Level::Trace);
+-
+-        // SAFETY: we send a mut pointer to an owned struct (`request`),
+-        // which has the correct layout for this IOCTL call.
+-        unsafe {
+-            ioctl::ipmi_send_request(self.fd(), std::ptr::addr_of_mut!(request))?;
+-        }
++        request.log(log::Level::Trace, data);
++        request.message.data = data.as_mut_ptr();
+
+-        // Ensure that data and bmc_addr live until _after_ the IOCTL completes.
+-        #[allow(clippy::drop_non_drop)]
+-        drop(request);
+-        #[allow(clippy::drop_non_drop)]
+-        drop(addr);
++        // SAFETY: `addr` and `data` remain live for the synchronous send.
++        unsafe { ioctl::send(&self.inner, request)? };
+
+         Ok(())
+     }
+@@ -308,7 +339,11 @@ impl IpmiConnection for File {
+     fn recv(&mut self) -> io::Result<Response> {
+         let start = std::time::Instant::now();
+
+-        let mut bmc_addr = IpmiSysIfaceAddr::bmc(0);
++        let mut addr = IpmiReceiveAddr {
++            ty: 0,
++            channel: 0,
++            data: [0; 32],
++        };
+
+         let mut response_data = [0u8; 1024];
+
+@@ -316,8 +351,8 @@ impl IpmiConnection for File {
+         let response_data_ptr = response_data.as_mut_ptr();
+
+         let mut recv = IpmiRecv {
+-            addr: std::ptr::addr_of_mut!(bmc_addr) as *mut u8,
+-            addr_len: core::mem::size_of::<IpmiSysIfaceAddr>() as u32,
++            addr: std::ptr::addr_of_mut!(addr).cast(),
++            addr_len: core::mem::size_of::<IpmiReceiveAddr>() as u32,
+             msg_id: 0,
+             recv_type: 0,
+             message: IpmiMessage {
+@@ -335,60 +370,27 @@ impl IpmiConnection for File {
+         // command we have sent.
+         //
+         // Ref: https://github.com/datdenkikniet/ipmi-rs/issues/39#issuecomment-3747421945
+-        let mut polls = [PollFd::new(self.inner.as_fd(), PollFlags::POLLIN)];
+-        let poll = nix::poll::poll(
+-            polls.as_mut_slice(),
+-            self.recv_timeout.as_millis().try_into().unwrap_or(u16::MAX),
+-        )?;
+-
+-        if poll != 1 {
++        if let Err(error) = wait_readable(&self.inner, self.recv_timeout) {
+             log::warn!(
+-                "Failed to receive message after waiting for {} ms.",
+-                start.elapsed().as_millis(),
++                "IPMI wait failed after {} ms: {error}",
++                start.elapsed().as_millis()
+             );
+-
+-            return Err(Errno::EAGAIN.into());
++            return Err(error);
+         }
+
+-        // SAFETY: we send a mut pointer to a fully owned struct (`recv`),
+-        // which has the correct layout for this IOCTL call.
+-        let ipmi_result =
+-            unsafe { ioctl::ipmi_recv_msg_trunc(self.fd(), std::ptr::addr_of_mut!(recv)) };
+-
+-        let ipmi_result = match ipmi_result {
+-            Ok(_) => recv,
+-            Err(e) => {
+-                log::error!("Error occurred while reading from IPMI: {e:?}");
+-                return Err(e.into());
+-            }
+-        };
+-
+-        // Ensure that response_data and bmc_addr live until _after_ the
+-        // IOCTL completes.
+-        #[allow(dropping_copy_types)]
+-        drop(response_data);
+-        #[allow(clippy::drop_non_drop)]
+-        drop(bmc_addr);
+-
++        // SAFETY: both receive buffers remain writable and live until the call
++        // returns. The response is decoded from the owned slice, not its raw pointer.
++        unsafe { ioctl::receive(&self.inner, &mut recv)? };
+         log::debug!("Received response after {} ms", start.elapsed().as_millis());
+-        ipmi_result.log(log::Level::Trace);
+-
+-        match Response::try_from(ipmi_result) {
+-            Ok(response) => {
+-                if response.seq() == self.seq {
+-                    Ok(response)
+-                } else {
+-                    Err(io::Error::other(format!(
+-                        "Invalid sequence number on response. Expected {}, got {}",
+-                        self.seq,
+-                        response.seq()
+-                    )))
+-                }
+-            }
+-            Err(e) => Err(io::Error::other(format!(
+-                "Error while creating response. {e:?}"
+-            ))),
++        let response = recv.into_response(&response_data)?;
++        if response.seq() != i64::from(self.seq) {
++            return Err(io::Error::other(format!(
++                "Invalid sequence number on response. Expected {}, got {}",
++                self.seq,
++                response.seq()
++            )));
+         }
++        Ok(response)
+     }
+
+     fn send_recv(&mut self, request: &mut Request) -> io::Result<Response> {
+@@ -397,3 +399,90 @@ impl IpmiConnection for File {
+         self.recv()
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::io::Write;
++    use std::mem::{offset_of, size_of};
++    use std::os::unix::net::UnixStream;
++
++    // Compared by the patch-family gate with the installed Linux UAPI header.
++    #[test]
++    fn kernel_abi_layout() {
++        println!(
++            "IPMI_ABI {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
++            size_of::<IpmiMessage>(),
++            size_of::<IpmiRequest>(),
++            size_of::<IpmiRecv>(),
++            size_of::<IpmiReceiveAddr>(),
++            size_of::<IpmiSysIfaceAddr>(),
++            size_of::<IpmiIpmbAddr>(),
++            offset_of!(IpmiMessage, data_len),
++            offset_of!(IpmiMessage, data),
++            offset_of!(IpmiRequest, addr_len),
++            offset_of!(IpmiRequest, msg_id),
++            offset_of!(IpmiRequest, message),
++            offset_of!(IpmiRecv, addr),
++            offset_of!(IpmiRecv, addr_len),
++            offset_of!(IpmiRecv, msg_id),
++            offset_of!(IpmiRecv, message),
++            offset_of!(IpmiReceiveAddr, data),
++            offset_of!(IpmiSysIfaceAddr, lun),
++            offset_of!(IpmiIpmbAddr, target_addr),
++            ioctl::SEND,
++            ioctl::RECEIVE,
++            ioctl::GET_ADDRESS
++        );
++    }
++
++    fn received(netfn: u8, len: u16) -> IpmiRecv {
++        IpmiRecv {
++            recv_type: 1,
++            addr: std::ptr::null_mut(),
++            addr_len: 0,
++            msg_id: 23,
++            message: IpmiMessage {
++                netfn,
++                cmd: 1,
++                data_len: len,
++                data: std::ptr::null_mut(),
++            },
++        }
++    }
++
++    #[test]
++    fn response_decoding_uses_the_owned_buffer_not_the_kernel_pointer() {
++        let buffer = [0, 0x12, 0x34, 0xff];
++        let response = received(7, 3).into_response(&buffer).unwrap();
++        assert_eq!(response.seq(), 23);
++        assert_eq!(response.cc(), 0);
++        assert_eq!(response.data(), &[0x12, 0x34]);
++        for (netfn, len) in [(7, 5), (7, 0), (6, 3)] {
++            assert_eq!(
++                received(netfn, len)
++                    .into_response(&buffer)
++                    .unwrap_err()
++                    .kind(),
++                io::ErrorKind::InvalidData
++            );
++        }
++    }
++
++    #[test]
++    fn poll_distinguishes_timeout_and_readable_data() {
++        let (reader, mut writer) = UnixStream::pair().unwrap();
++        assert_eq!(
++            wait_readable(&reader, Duration::ZERO).unwrap_err().kind(),
++            io::ErrorKind::WouldBlock
++        );
++        writer.write_all(&[1]).unwrap();
++        wait_readable(&reader, Duration::ZERO).unwrap();
++    }
++
++    #[test]
++    fn invalid_ioctl_device_preserves_errno() {
++        let file = std::fs::File::open("/dev/null").unwrap();
++        assert_eq!(ioctl::get_address(file).unwrap_err(), Errno::NOTTY);
++    }
++}
 diff --git a/src/lib.rs b/src/lib.rs
 index 68040ae..c3f453e 100644
 --- a/src/lib.rs
@@ -122,8 +625,8 @@ index 68040ae..c3f453e 100644
 @@ -11,6 +11,7 @@ mod file;
  #[cfg(feature = "unix-file")]
  pub use file::File;
- 
+
 +#[cfg(feature = "rmcp")]
  pub mod rmcp;
- 
+
  mod error;

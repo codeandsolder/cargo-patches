@@ -286,6 +286,14 @@
       "patch": "patches/ipmi-rs.patch"
     }
   ],
+  "rtime-clock": [
+    {
+      "name": "rtime-clock",
+      "version": "0.16.0",
+      "checksum": "b11a0858da3f8b76988e4cd4ce59ccc3b4336a4d12cc99cd896ea35153c7baf2",
+      "patch": "patches/rtime-clock.patch"
+    }
+  ],
   "oar-image-features": [
     {
       "name": "oar-ocr",
