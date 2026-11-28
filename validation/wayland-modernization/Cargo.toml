@@ -6,7 +6,11 @@ publish = false
 
 [workspace]
 resolver = "2"
+members = ["sctk-adwaita"]
 exclude = ["winit", "ui-events-winit", "smithay-clipboard", "wayland-backend"]
+
+[features]
+title-font = ["winit/wayland-csd-adwaita"]
 
 [dependencies]
 winit = { path = "winit", default-features = false, features = ["x11", "wayland", "wayland-dlopen", "rwh_06"] }

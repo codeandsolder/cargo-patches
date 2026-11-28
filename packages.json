@@ -228,6 +228,12 @@
       "version": "0.7.3",
       "checksum": "71704c03f739f7745053bde45fa203a46c58d25bc5c4efba1d9a60e9dba81226",
       "patch": "patches/smithay-clipboard.patch"
+    },
+    {
+      "name": "sctk-adwaita",
+      "version": "0.11.1",
+      "checksum": "ea2a4360b9abcdcee43809e6fc11d6d61ca5d25734026a8fc46c2883eea3f13f",
+      "patch": "patches/sctk-adwaita.patch"
     }
   ],
   "vtkio-xml-security": [

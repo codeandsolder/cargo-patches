@@ -91,3 +91,21 @@ backend, reports worker initialization and selection errors, and preserves the
 primary-selection protocol's independent availability. The validation workspace
 checks the type boundary and that event translation cannot enable the old title
 renderer.
+
+The Wayland family uses one client-decoration text renderer: Skrifa 0.49
+and Harfrust 0.15 sharing read-fonts 0.46, with Unicode bidi visual runs,
+script itemization, native font instances and ink-bounds-aware rasterization.
+Winit's ordinary decoration feature selects it; the title-free feature
+remains independent. The obsolete ab_glyph, crossfont and cosmic-text
+backend alternatives are removed in this family revision. The renderer
+loads the selected collection face and named instance once and retains
+the existing bundled-font fallback for unavailable system fonts.
+
+The sctk-adwaita 0.11.1 registry archive excludes the upstream image
+snapshot directory. The patch restores its unmodified expected PNGs
+from upstream revision ea5939eca352d39fd0b7b9160fb2633da4bc6cc7
+(the archive's VCS provenance). The original shaping fixture is generated
+by validation/wayland-modernization/generate-font-fixture.py and has
+known GPOS kerning, GSUB ligature and negative-bearing geometry.
+The family gate runs the original pixel tests and the title tests, and
+compiles both decorated and undecorated Winit/clipboard consumers.

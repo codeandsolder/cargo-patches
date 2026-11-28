@@ -1,0 +1,2604 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index a4aee20..30d99f2 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -29,16 +29,11 @@ license = "MIT"
+ repository = "https://github.com/PolyMeilex/sctk-adwaita"
+ 
+ [features]
+-ab_glyph = [
+-    "dep:ab_glyph",
+-    "memmap2",
+-]
+-cosmic-text = ["dep:cosmic-text"]
+-crossfont = ["dep:crossfont"]
+-default = ["ab_glyph"]
++default = ["skrifa"]
+ skrifa = [
+     "dep:skrifa",
+-    "memmap2",
++    "dep:harfrust",
++    "dep:unicode-bidi",
+ ]
+ 
+ [lib]
+@@ -49,27 +44,21 @@ path = "src/lib.rs"
+ name = "window"
+ path = "examples/window.rs"
+ 
+-[dependencies.ab_glyph]
+-version = "0.2.17"
+-optional = true
+-
+-[dependencies.cosmic-text]
+-version = "0.19.0"
++[dependencies.harfrust]
++version = "0.15"
+ optional = true
+ 
+-[dependencies.crossfont]
+-version = "0.9.0"
++[dependencies.unicode-bidi]
++version = "0.3.18"
+ optional = true
+ 
+ [dependencies.log]
+ version = "0.4"
+ 
+-[dependencies.memmap2]
+-version = "0.9.0"
+-optional = true
+-
+ [dependencies.skrifa]
+-version = ">=0.40, <=0.44"
++version = "0.49"
++default-features = false
++features = ["std"]
+ optional = true
+ 
+ [dependencies.smithay-client-toolkit]
+diff --git a/Cargo.toml.orig b/Cargo.toml.orig
+index 69b22c8..110b399 100644
+--- a/Cargo.toml.orig
++++ b/Cargo.toml.orig
+@@ -15,21 +15,16 @@ exclude = [
+ 
+ [dependencies]
+ log = "0.4"
+-memmap2 = { version = "0.9.0", optional = true }
+ tiny-skia = { version = "0.12", default-features = false, features = [
+   "std",
+   "simd",
+ ] }
+ smithay-client-toolkit = { version = "0.20.0", default-features = false }
+ 
+-# Draw title text using crossfont `--features crossfont`
+-crossfont = { version = "0.9.0", optional = true }
+-# Draw title text using ab_glyph `--features ab_glyph`
+-ab_glyph = { version = "0.2.17", optional = true }
+ # Draw title text using skrifa + tiny-skia `--features skrifa`
+-skrifa = { version = ">=0.40, <=0.44", optional = true }
+-# Draw title text using cosmic-text `--features cosmic-text`
+-cosmic-text = { version = "0.19.0", optional = true }
++skrifa = { version = "0.49", default-features = false, features = ["std"], optional = true }
++harfrust = { version = "0.15", optional = true }
++unicode-bidi = { version = "0.3.18", optional = true }
+ 
+ [dev-dependencies]
+ tiny-skia = { version = "0.12", default-features = false, features = [
+@@ -39,8 +34,5 @@ tiny-skia = { version = "0.12", default-features = false, features = [
+ ] }
+ 
+ [features]
+-default = ["ab_glyph"]
+-crossfont = ["dep:crossfont"]
+-ab_glyph = ["dep:ab_glyph", "memmap2"]
+-skrifa = ["dep:skrifa", "memmap2"]
+-cosmic-text = ["dep:cosmic-text"]
++default = ["skrifa"]
++skrifa = ["dep:skrifa", "dep:harfrust", "dep:unicode-bidi"]
+diff --git a/README.md b/README.md
+index 2f77c82..0597d24 100644
+--- a/README.md
++++ b/README.md
+@@ -8,19 +8,13 @@
+ ### Dark mode:
+ ![image](https://user-images.githubusercontent.com/20758186/169424673-3b9fa022-f112-4928-8360-305a714ba979.png)
+ 
+-## Title text: ab_glyph
+-By default title text is drawn with _ab_glyph_ crate. This can be disabled by disabling default features.
++## Title text
+ 
+-## Title text: skrifa
+-Title text can be drawn with the _skrifa_ crate. No dynamically linked dependencies required.
++The default title renderer uses Skrifa and Harfrust, sharing the same font
++instance for shaping, kerning and rasterization. No dynamically linked font
++library is required. Disable default features for decorations without title
++text.
+ 
+ ```toml
+ sctk-adwaita = { default-features = false, features = ["skrifa"] }
+ ```
+-
+-## Title text: crossfont
+-Alternatively title text may be drawn with _crossfont_ crate. This adds a requirement on _freetype_.
+-
+-```toml
+-sctk-adwaita = { default-features = false, features = ["crossfont"] }
+-```
+diff --git a/src/title.rs b/src/title.rs
+index d0e6f7b..89486c5 100644
+--- a/src/title.rs
++++ b/src/title.rs
+@@ -1,117 +1,34 @@
+ use tiny_skia::{Color, Pixmap};
+ 
+-#[cfg(any(
+-    feature = "crossfont",
+-    feature = "cosmic-text",
+-    feature = "skrifa",
+-    feature = "ab_glyph"
+-))]
++#[cfg(feature = "skrifa")]
+ mod config;
+-#[cfg(any(
+-    feature = "crossfont",
+-    feature = "cosmic-text",
+-    feature = "skrifa",
+-    feature = "ab_glyph"
+-))]
++#[cfg(not(feature = "skrifa"))]
++mod dumb;
++#[cfg(feature = "skrifa")]
+ mod font_preference;
+-
+-#[cfg(feature = "crossfont")]
+-mod crossfont_renderer;
+-
+-#[cfg(all(not(feature = "crossfont"), feature = "cosmic-text"))]
+-mod cosmic_text_renderer;
+-
+-#[cfg(all(
+-    not(feature = "crossfont"),
+-    not(feature = "cosmic-text"),
+-    feature = "skrifa"
+-))]
++#[cfg(feature = "skrifa")]
+ mod skrifa_renderer;
+ 
+-#[cfg(all(
+-    not(feature = "crossfont"),
+-    not(feature = "cosmic-text"),
+-    not(feature = "skrifa"),
+-    feature = "ab_glyph"
+-))]
+-mod ab_glyph_renderer;
+-
+-#[cfg(all(
+-    not(feature = "crossfont"),
+-    not(feature = "cosmic-text"),
+-    not(feature = "skrifa"),
+-    not(feature = "ab_glyph")
+-))]
+-mod dumb;
+-
+ #[derive(Debug)]
+ pub struct TitleText {
+-    #[cfg(feature = "crossfont")]
+-    imp: crossfont_renderer::CrossfontTitleText,
+-    #[cfg(all(not(feature = "crossfont"), feature = "cosmic-text"))]
+-    imp: cosmic_text_renderer::CosmicTextTitleText,
+-    #[cfg(all(
+-        not(feature = "crossfont"),
+-        not(feature = "cosmic-text"),
+-        feature = "skrifa"
+-    ))]
++    #[cfg(feature = "skrifa")]
+     imp: skrifa_renderer::SkrifaTitleText,
+-    #[cfg(all(
+-        not(feature = "crossfont"),
+-        not(feature = "cosmic-text"),
+-        not(feature = "skrifa"),
+-        feature = "ab_glyph"
+-    ))]
+-    imp: ab_glyph_renderer::AbGlyphTitleText,
+-    #[cfg(all(
+-        not(feature = "crossfont"),
+-        not(feature = "cosmic-text"),
+-        not(feature = "skrifa"),
+-        not(feature = "ab_glyph")
+-    ))]
++    #[cfg(not(feature = "skrifa"))]
+     imp: dumb::DumbTitleText,
+ }
+ 
+ impl TitleText {
+     pub fn new(color: Color) -> Option<Self> {
+-        #[cfg(feature = "crossfont")]
+-        return crossfont_renderer::CrossfontTitleText::new(color)
+-            .ok()
+-            .map(|imp| Self { imp });
+-
+-        #[cfg(all(not(feature = "crossfont"), feature = "cosmic-text"))]
+-        return Some(Self {
+-            imp: cosmic_text_renderer::CosmicTextTitleText::new(color),
+-        });
+-
+-        #[cfg(all(
+-            not(feature = "crossfont"),
+-            not(feature = "cosmic-text"),
+-            feature = "skrifa"
+-        ))]
+-        return Some(Self {
+-            imp: skrifa_renderer::SkrifaTitleText::new(color),
+-        });
+-
+-        #[cfg(all(
+-            not(feature = "crossfont"),
+-            not(feature = "cosmic-text"),
+-            not(feature = "skrifa"),
+-            feature = "ab_glyph"
+-        ))]
+-        return Some(Self {
+-            imp: ab_glyph_renderer::AbGlyphTitleText::new(color),
+-        });
+-
+-        #[cfg(all(
+-            not(feature = "crossfont"),
+-            not(feature = "cosmic-text"),
+-            not(feature = "skrifa"),
+-            not(feature = "ab_glyph")
+-        ))]
++        #[cfg(feature = "skrifa")]
++        {
++            Some(Self {
++                imp: skrifa_renderer::SkrifaTitleText::new(color),
++            })
++        }
++        #[cfg(not(feature = "skrifa"))]
+         {
+             let _ = color;
+-            return None;
++            None
+         }
+     }
+ 
+diff --git a/src/title/ab_glyph_renderer.rs b/src/title/ab_glyph_renderer.rs
+deleted file mode 100644
+index 603b965..0000000
+--- a/src/title/ab_glyph_renderer.rs
++++ /dev/null
+@@ -1,217 +0,0 @@
+-//! Title renderer using ab_glyph.
+-//!
+-//! Requires no dynamically linked dependencies.
+-//!
+-//! Can fallback to a embedded Cantarell-Regular.ttf font (SIL Open Font Licence v1.1)
+-//! if the system font doesn't work.
+-use crate::title::{config, font_preference::FontPreference};
+-use ab_glyph::{point, Font, FontRef, Glyph, PxScale, PxScaleFont, ScaleFont, VariableFont};
+-use std::{fs::File, process::Command};
+-use tiny_skia::{Color, Pixmap, PremultipliedColorU8};
+-
+-const CANTARELL: &[u8] = include_bytes!("Cantarell-Regular.ttf");
+-
+-#[derive(Debug)]
+-pub struct AbGlyphTitleText {
+-    title: String,
+-    font: Option<(memmap2::Mmap, FontPreference)>,
+-    original_px_size: f32,
+-    size: PxScale,
+-    color: Color,
+-    pixmap: Option<Pixmap>,
+-}
+-
+-impl AbGlyphTitleText {
+-    pub fn new(color: Color) -> Self {
+-        let font_pref = config::titlebar_font().unwrap_or_default();
+-        let font_pref_pt_size = font_pref.pt_size;
+-        let font = font_file_matching(&font_pref)
+-            .and_then(|f| mmap(&f))
+-            .map(|mmap| (mmap, font_pref));
+-
+-        let size = parse_font(&font)
+-            .pt_to_px_scale(font_pref_pt_size)
+-            .unwrap_or_else(|| {
+-                log::error!("invalid font units_per_em");
+-                PxScale { x: 17.6, y: 17.6 }
+-            });
+-
+-        Self {
+-            title: <_>::default(),
+-            font,
+-            original_px_size: size.x,
+-            size,
+-            color,
+-            pixmap: None,
+-        }
+-    }
+-
+-    pub fn update_scale(&mut self, scale: u32) {
+-        let new_scale = PxScale::from(self.original_px_size * scale as f32);
+-        if (self.size.x - new_scale.x).abs() > f32::EPSILON {
+-            self.size = new_scale;
+-            self.pixmap = self.render();
+-        }
+-    }
+-
+-    pub fn update_title(&mut self, title: impl Into<String>) {
+-        let new_title = title.into();
+-        if new_title != self.title {
+-            self.title = new_title;
+-            self.pixmap = self.render();
+-        }
+-    }
+-
+-    pub fn update_color(&mut self, color: Color) {
+-        if color != self.color {
+-            self.color = color;
+-            self.pixmap = self.render();
+-        }
+-    }
+-
+-    pub fn pixmap(&self) -> Option<&Pixmap> {
+-        self.pixmap.as_ref()
+-    }
+-
+-    /// Render returning the new `Pixmap`.
+-    fn render(&self) -> Option<Pixmap> {
+-        let font = parse_font(&self.font);
+-        let font = font.as_scaled(self.size);
+-
+-        let glyphs: Vec<_> = self
+-            .layout(&font)
+-            .into_iter()
+-            .filter_map(|g| font.outline_glyph(g))
+-            .collect();
+-
+-        // calc combined px bound coordinates of the rendered glyphs
+-        // Note: It is possible for min.x to be negative, e.g. the first glyph's
+-        //       outline extends a little out to the left further than the layout x origin 0.0
+-        let all_px_bounds = glyphs.iter().map(|g| g.px_bounds()).reduce(|mut b, next| {
+-            b.min.x = b.min.x.min(next.min.x);
+-            b.max.x = b.max.x.max(next.max.x);
+-            // min(0.0): consistently allocate enough for the whole ascent even
+-            //           if all glyphs don't need that much, makes positioning easier later.
+-            //           If removed the pixmap will be exactly sized, but we'd need a
+-            //           vertical offset to render, say "Tg" vs "gg", consistently
+-            b.min.y = b.min.y.min(next.min.y).min(0.0);
+-            b.max.y = b.max.y.max(next.max.y);
+-            b
+-        })?;
+-
+-        let width = all_px_bounds.width() as _;
+-        let mut pixmap = Pixmap::new(width, all_px_bounds.height() as _)?;
+-        let pixels = pixmap.pixels_mut();
+-
+-        for glyph in glyphs {
+-            let bounds = glyph.px_bounds();
+-            // calc top/left ords in pixmap space
+-            // pixmap-x=0 means the *left most pixel*, equivalent to
+-            // px_bounds.min.x which *may be non-zero* (and similarly with y)
+-            // so `- px_bounds.min` converts the left-most/top-most to 0
+-            let pixmap_left = bounds.min.x as u32 - all_px_bounds.min.x as u32;
+-            let pixmap_top = bounds.min.y as u32 - all_px_bounds.min.y as u32;
+-            glyph.draw(|x, y, c| {
+-                // `ab_glyph` may return values greater than 1.0, but they are defined to be
+-                // same as 1.0. For our purposes, we need to constrain this value.
+-                let c = c.min(1.0);
+-
+-                let p_idx = (pixmap_top + y) * width + pixmap_left + x;
+-                let Some(pixel) = pixels.get_mut(p_idx as usize) else {
+-                    debug_assert!(
+-                        false,
+-                        "oob pixel: x={x} y={y} top={pixmap_top} left={pixmap_left}, w={width}"
+-                    );
+-                    return;
+-                };
+-
+-                let old_alpha_u8 = pixel.alpha();
+-
+-                let new_alpha = c + (old_alpha_u8 as f32 / 255.0);
+-                if let Some(px) = PremultipliedColorU8::from_rgba(
+-                    (self.color.red() * new_alpha * 255.0) as _,
+-                    (self.color.green() * new_alpha * 255.0) as _,
+-                    (self.color.blue() * new_alpha * 255.0) as _,
+-                    (new_alpha * 255.0) as _,
+-                ) {
+-                    *pixel = px;
+-                }
+-            })
+-        }
+-
+-        Some(pixmap)
+-    }
+-
+-    /// Simple single-line glyph layout starting from `(0, ascent)`.
+-    fn layout(&self, font: &PxScaleFont<impl Font>) -> Vec<Glyph> {
+-        let mut caret = point(0.0, font.ascent());
+-        let mut last_glyph: Option<Glyph> = None;
+-        let mut target = Vec::new();
+-        for c in self.title.chars() {
+-            if c.is_control() {
+-                continue;
+-            }
+-            let mut glyph = font.scaled_glyph(c);
+-            if let Some(previous) = last_glyph.take() {
+-                caret.x += font.kern(previous.id, glyph.id);
+-            }
+-            glyph.position = caret;
+-
+-            last_glyph = Some(glyph.clone());
+-            caret.x += font.h_advance(glyph.id);
+-
+-            target.push(glyph);
+-        }
+-        target
+-    }
+-}
+-
+-/// Parse the memmapped system font or fallback to built-in cantarell.
+-fn parse_font(sys_font: &Option<(memmap2::Mmap, FontPreference)>) -> FontRef<'_> {
+-    match sys_font {
+-        Some((mmap, font_pref)) => {
+-            FontRef::try_from_slice(mmap)
+-                .map(|mut f| {
+-                    // basic "bold" handling for variable fonts
+-                    if font_pref
+-                        .style
+-                        .as_deref()
+-                        .is_some_and(|s| s.eq_ignore_ascii_case("bold"))
+-                    {
+-                        f.set_variation(b"wght", 700.0);
+-                    }
+-                    f
+-                })
+-                .unwrap_or_else(|_| {
+-                    // We control the default font, so I guess it's fine to unwrap it
+-                    #[allow(clippy::unwrap_used)]
+-                    FontRef::try_from_slice(CANTARELL).unwrap()
+-                })
+-        }
+-        // We control the default font, so I guess it's fine to unwrap it
+-        #[allow(clippy::unwrap_used)]
+-        _ => FontRef::try_from_slice(CANTARELL).unwrap(),
+-    }
+-}
+-
+-/// Font-config without dynamically linked dependencies
+-fn font_file_matching(pref: &FontPreference) -> Option<File> {
+-    let mut pattern = pref.name.clone();
+-    if let Some(style) = &pref.style {
+-        pattern.push(':');
+-        pattern.push_str(style);
+-    }
+-    Command::new("fc-match")
+-        .arg("-f")
+-        .arg("%{file}")
+-        .arg(&pattern)
+-        .output()
+-        .ok()
+-        .and_then(|out| String::from_utf8(out.stdout).ok())
+-        .and_then(|path| File::open(path.trim()).ok())
+-}
+-
+-fn mmap(file: &File) -> Option<memmap2::Mmap> {
+-    // Safety: System font files are not expected to be mutated during use
+-    unsafe { memmap2::Mmap::map(file).ok() }
+-}
+diff --git a/src/title/cosmic_text_renderer.rs b/src/title/cosmic_text_renderer.rs
+deleted file mode 100644
+index 6850160..0000000
+--- a/src/title/cosmic_text_renderer.rs
++++ /dev/null
+@@ -1,186 +0,0 @@
+-use crate::title::{config, font_preference::FontPreference};
+-use cosmic_text::{
+-    Attrs, AttrsList, BufferLine, Color as CosmicColor, Family, FontSystem, Hinting, LineEnding,
+-    Shaping, Style, SwashCache, Weight, Wrap,
+-};
+-use tiny_skia::{Color, ColorU8, Pixmap, PremultipliedColorU8};
+-
+-// Use arbitrarily large width, then calculate max/min x from resulting glyphs
+-const MAX_WIDTH: f32 = 1024.0 * 1024.0;
+-
+-// Title text never contains tabs; this is just the value `shape()` requires.
+-const TAB_WIDTH: u16 = 8;
+-
+-fn attrs_from_font_pref(font_preference: &FontPreference) -> Attrs<'_> {
+-    let mut attrs = Attrs::new().family(Family::Name(&font_preference.name));
+-    // The GNOME `titlebar-font` style is a free-form descriptor such as
+-    // "Bold", "Italic", or "Bold Italic"; map the keywords we understand onto
+-    // cosmic-text weight/style and ignore the rest.
+-    if let Some(style) = &font_preference.style {
+-        let style = style.to_ascii_lowercase();
+-        if style.contains("bold") {
+-            attrs = attrs.weight(Weight::BOLD);
+-        }
+-        if style.contains("italic") {
+-            attrs = attrs.style(Style::Italic);
+-        } else if style.contains("oblique") {
+-            attrs = attrs.style(Style::Oblique);
+-        }
+-    }
+-    attrs
+-}
+-
+-pub struct CosmicTextTitleText {
+-    buffer_line: BufferLine,
+-    cache: SwashCache,
+-    color: Color,
+-    scale: u32,
+-    pixmap: Option<Pixmap>,
+-    font_pref: FontPreference,
+-    font_system: FontSystem,
+-}
+-
+-impl std::fmt::Debug for CosmicTextTitleText {
+-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+-        f.debug_struct("TitleText")
+-            .field("color", &self.color)
+-            .field("scale", &self.scale)
+-            .field("pixmap", &self.pixmap)
+-            .field("font_pref", &self.font_pref)
+-            .finish()
+-    }
+-}
+-
+-impl CosmicTextTitleText {
+-    pub fn new(color: Color) -> Self {
+-        let buffer_line = BufferLine::new(
+-            "",
+-            LineEnding::default(),
+-            AttrsList::new(&Attrs::new()),
+-            Shaping::Advanced,
+-        );
+-        let cache = SwashCache::new();
+-        let font_pref = config::titlebar_font().unwrap_or_default();
+-        Self {
+-            buffer_line,
+-            cache,
+-            color,
+-            scale: 1,
+-            pixmap: None,
+-            font_pref,
+-            font_system: FontSystem::new(),
+-        }
+-    }
+-
+-    pub fn update_scale(&mut self, scale: u32) {
+-        self.scale = scale;
+-        self.update_pixmap();
+-    }
+-
+-    pub fn update_title<S: Into<String>>(&mut self, title: S) {
+-        let attrs = attrs_from_font_pref(&self.font_pref);
+-        self.buffer_line
+-            .set_text(title.into(), LineEnding::default(), AttrsList::new(&attrs));
+-        self.update_pixmap();
+-    }
+-
+-    pub fn update_color(&mut self, color: Color) {
+-        self.color = color;
+-        self.update_pixmap();
+-    }
+-
+-    pub fn pixmap(&self) -> Option<&Pixmap> {
+-        self.pixmap.as_ref()
+-    }
+-
+-    fn update_pixmap(&mut self) {
+-        self.pixmap = None;
+-
+-        let shape_line = self.buffer_line.shape(&mut self.font_system, TAB_WIDTH);
+-
+-        // Font size in device pixels: points -> pixels at 96 DPI, scaled by
+-        // the integer output scale. This is the em size handed to `layout()`,
+-        // NOT the line box height.
+-        let font_size = self.scale as f32 * self.font_pref.pt_size * 96.0 / 72.0;
+-        let layout_lines = shape_line.layout(
+-            font_size,
+-            Some(MAX_WIDTH),
+-            Wrap::Word,
+-            None,
+-            None,
+-            Hinting::Disabled,
+-        );
+-        let Some(layout_line) = layout_lines.first() else {
+-            return;
+-        };
+-        let min_x = layout_line
+-            .glyphs
+-            .iter()
+-            .map(|i| i.x.floor() as i32)
+-            .min()
+-            .unwrap_or(0);
+-        let width = layout_line.w.ceil() as u32;
+-
+-        // Size the pixmap from the run's actual ascent + descent and place the
+-        // baseline at `max_ascent`. Using the font size as the height (with the
+-        // baseline pinned to the bottom) clips descenders.
+-        let baseline = layout_line.max_ascent.ceil() as i32;
+-        let height = (layout_line.max_ascent + layout_line.max_descent).ceil() as u32;
+-
+-        let Some(mut pixmap) = Pixmap::new(width, height) else {
+-            return;
+-        };
+-        let pixels = pixmap.pixels_mut();
+-
+-        let color = self.color.to_color_u8();
+-        let color = CosmicColor::rgba(color.red(), color.green(), color.blue(), color.alpha());
+-        for glyph in &layout_line.glyphs {
+-            let physical_glyph = glyph.physical((0., 0.), 1.); // TODO scale
+-            self.cache.with_pixels(
+-                &mut self.font_system,
+-                physical_glyph.cache_key,
+-                color,
+-                |pixel_x, pixel_y, color| {
+-                    if color.a() == 0 {
+-                        return;
+-                    }
+-
+-                    let y = baseline + physical_glyph.y + pixel_y;
+-                    let x = physical_glyph.x + pixel_x - min_x;
+-                    if x < 0 || x >= width as i32 {
+-                        return;
+-                    }
+-                    let idx = y * width as i32 + x;
+-                    if idx < 0 {
+-                        return;
+-                    }
+-                    if let Some(pixel) = pixels.get_mut(idx as usize) {
+-                        let color = ColorU8::from_rgba(color.r(), color.g(), color.b(), color.a());
+-                        *pixel = alpha_blend(color.premultiply(), *pixel);
+-                    }
+-                },
+-            );
+-        }
+-
+-        self.pixmap = Some(pixmap);
+-    }
+-}
+-
+-// `a` over `b`
+-// This should be correct but not especially efficient.
+-fn alpha_blend(a: PremultipliedColorU8, b: PremultipliedColorU8) -> PremultipliedColorU8 {
+-    let inv_alpha = 255 - u16::from(a.alpha());
+-    let blend_channel = |channel_a: u8, channel_b: u8| -> u8 {
+-        let blended = u16::from(channel_a) + u16::from(channel_b) * inv_alpha / 255;
+-        blended.min(255) as u8
+-    };
+-    // Channels stay <= alpha through the blend, so this can't actually be
+-    // `None`; fall back to the destination pixel rather than panicking.
+-    PremultipliedColorU8::from_rgba(
+-        blend_channel(a.red(), b.red()),
+-        blend_channel(a.green(), b.green()),
+-        blend_channel(a.blue(), b.blue()),
+-        blend_channel(a.alpha(), b.alpha()),
+-    )
+-    .unwrap_or(b)
+-}
+diff --git a/src/title/crossfont_renderer.rs b/src/title/crossfont_renderer.rs
+deleted file mode 100644
+index 18ce6b5..0000000
+--- a/src/title/crossfont_renderer.rs
++++ /dev/null
+@@ -1,227 +0,0 @@
+-use std::mem;
+-
+-use crossfont::{GlyphKey, Rasterize, RasterizedGlyph};
+-use tiny_skia::{Color, Pixmap, PixmapPaint, PixmapRef, Transform};
+-
+-use crate::title::config;
+-
+-pub struct CrossfontTitleText {
+-    title: String,
+-
+-    font_desc: crossfont::FontDesc,
+-    font_key: crossfont::FontKey,
+-    size: crossfont::Size,
+-    scale: u32,
+-    metrics: crossfont::Metrics,
+-    rasterizer: crossfont::Rasterizer,
+-    color: Color,
+-
+-    pixmap: Option<Pixmap>,
+-}
+-
+-impl std::fmt::Debug for CrossfontTitleText {
+-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+-        f.debug_struct("TitleText")
+-            .field("title", &self.title)
+-            .field("font_desc", &self.font_desc)
+-            .field("font_key", &self.font_key)
+-            .field("size", &self.size)
+-            .field("scale", &self.scale)
+-            .field("pixmap", &self.pixmap)
+-            .finish()
+-    }
+-}
+-
+-impl CrossfontTitleText {
+-    pub fn new(color: Color) -> Result<Self, crossfont::Error> {
+-        let title = "".into();
+-
+-        let font_pref = config::titlebar_font().unwrap_or_default();
+-        let font_style = font_pref
+-            .style
+-            .map(crossfont::Style::Specific)
+-            .unwrap_or_else(|| crossfont::Style::Description {
+-                slant: crossfont::Slant::Normal,
+-                weight: crossfont::Weight::Normal,
+-            });
+-        let font_desc = crossfont::FontDesc::new(&font_pref.name, font_style);
+-
+-        let mut rasterizer = crossfont::Rasterizer::new()?;
+-        let size = crossfont::Size::new(font_pref.pt_size);
+-        let font_key = rasterizer.load_font(&font_desc, size)?;
+-
+-        // Need to load at least one glyph for the face before calling metrics.
+-        // The glyph requested here ('m' at the time of writing) has no special
+-        // meaning.
+-        rasterizer.get_glyph(GlyphKey {
+-            font_key,
+-            character: 'm',
+-            size,
+-        })?;
+-
+-        let metrics = rasterizer.metrics(font_key, size)?;
+-
+-        let mut this = Self {
+-            pixmap: None,
+-            rasterizer,
+-            font_desc,
+-            font_key,
+-            scale: 1,
+-            metrics,
+-            title,
+-            color,
+-            size,
+-        };
+-
+-        this.rerender();
+-
+-        Ok(this)
+-    }
+-
+-    fn update_metrics(&mut self) -> Result<(), crossfont::Error> {
+-        self.rasterizer.get_glyph(GlyphKey {
+-            font_key: self.font_key,
+-            character: 'm',
+-            size: self.size,
+-        })?;
+-        self.metrics = self.rasterizer.metrics(self.font_key, self.size)?;
+-        Ok(())
+-    }
+-
+-    pub fn update_scale(&mut self, scale: u32) {
+-        let old_scale = mem::replace(&mut self.scale, scale);
+-        if old_scale != self.scale {
+-            self.size = self.size.scale(self.scale as f32 / old_scale as f32);
+-            self.update_metrics().ok();
+-            self.rerender();
+-        }
+-    }
+-
+-    pub fn update_title<S: Into<String>>(&mut self, title: S) {
+-        let title = title.into();
+-        if self.title != title {
+-            self.title = title;
+-            self.rerender();
+-        }
+-    }
+-
+-    pub fn update_color(&mut self, color: Color) {
+-        if self.color != color {
+-            self.color = color;
+-            self.rerender();
+-        }
+-    }
+-
+-    fn rerender(&mut self) {
+-        let glyphs: Vec<_> = self
+-            .title
+-            .chars()
+-            .filter_map(|character| {
+-                let key = GlyphKey {
+-                    character,
+-                    font_key: self.font_key,
+-                    size: self.size,
+-                };
+-
+-                self.rasterizer
+-                    .get_glyph(key)
+-                    .map(|glyph| (key, glyph))
+-                    .ok()
+-            })
+-            .collect();
+-
+-        if glyphs.is_empty() {
+-            self.pixmap = None;
+-            return;
+-        }
+-
+-        let width = self.calc_width(&glyphs);
+-        let height = self.metrics.line_height.round() as i32;
+-
+-        let mut pixmap = if let Some(p) = Pixmap::new(width as u32, height as u32) {
+-            p
+-        } else {
+-            self.pixmap = None;
+-            return;
+-        };
+-        // pixmap.fill(Color::from_rgba8(255, 0, 0, 55));
+-
+-        let mut caret = 0;
+-        let mut last_glyph = None;
+-
+-        for (key, glyph) in glyphs {
+-            let mut buffer = Vec::with_capacity(glyph.width as usize * 4);
+-
+-            let glyph_buffer = match &glyph.buffer {
+-                crossfont::BitmapBuffer::Rgb(v) => v.chunks(3),
+-                crossfont::BitmapBuffer::Rgba(v) => v.chunks(4),
+-            };
+-
+-            for px in glyph_buffer {
+-                let alpha = if let Some(alpha) = px.get(3) {
+-                    *alpha as f32 / 255.0
+-                } else {
+-                    let r = px[0] as f32 / 255.0;
+-                    let g = px[1] as f32 / 255.0;
+-                    let b = px[2] as f32 / 255.0;
+-                    (r + g + b) / 3.0
+-                };
+-
+-                let mut color = self.color;
+-                color.set_alpha(alpha);
+-                let color = color.premultiply().to_color_u8();
+-
+-                buffer.push(color.red());
+-                buffer.push(color.green());
+-                buffer.push(color.blue());
+-                buffer.push(color.alpha());
+-            }
+-
+-            if let Some(last) = last_glyph {
+-                let (x, _) = self.rasterizer.kerning(last, key);
+-                caret += x as i32;
+-            }
+-
+-            if let Some(pixmap_glyph) =
+-                PixmapRef::from_bytes(&buffer, glyph.width as _, glyph.height as _)
+-            {
+-                pixmap.draw_pixmap(
+-                    glyph.left + caret,
+-                    height - glyph.top + self.metrics.descent.round() as i32,
+-                    pixmap_glyph,
+-                    &PixmapPaint::default(),
+-                    Transform::identity(),
+-                    None,
+-                );
+-            }
+-
+-            caret += glyph.advance.0;
+-
+-            last_glyph = Some(key);
+-        }
+-
+-        self.pixmap = Some(pixmap);
+-    }
+-
+-    pub fn pixmap(&self) -> Option<&Pixmap> {
+-        self.pixmap.as_ref()
+-    }
+-
+-    fn calc_width(&mut self, glyphs: &[(GlyphKey, RasterizedGlyph)]) -> i32 {
+-        let mut caret = 0;
+-        let mut last_glyph: Option<&GlyphKey> = None;
+-
+-        for (key, glyph) in glyphs.iter() {
+-            if let Some(last) = last_glyph {
+-                let (x, _) = self.rasterizer.kerning(*last, *key);
+-                caret += x as i32;
+-            }
+-
+-            caret += glyph.advance.0;
+-
+-            last_glyph = Some(key);
+-        }
+-
+-        caret
+-    }
+-}
+diff --git a/src/title/skrifa_renderer.rs b/src/title/skrifa_renderer.rs
+index 39bd772..b5ca3c8 100644
+--- a/src/title/skrifa_renderer.rs
++++ b/src/title/skrifa_renderer.rs
+@@ -5,20 +5,17 @@
+ //! Can fallback to an embedded Cantarell-Regular.ttf font (SIL Open Font Licence v1.1)
+ //! if the system font doesn't work.
+ use crate::title::{config, font_preference::FontPreference};
+-use skrifa::{
+-    instance::{Location, LocationRef, Size},
+-    outline::{DrawSettings, HintingInstance, HintingOptions, OutlinePen},
+-    MetadataProvider, Tag,
+-};
+-use std::{fs::File, process::Command};
++use harfrust::{Buffer, Direction, Script, ShapeOptions, ShaperFont};
++use skrifa::{DrawMemory, Font, GlyphId, HintOptions, PathSink, ScalerFont};
++use std::{fmt, ops::Range, process::Command};
+ use tiny_skia::{Color, FillRule, Paint, Pixmap, Transform};
++use unicode_bidi::BidiInfo;
+ 
+ const CANTARELL: &[u8] = include_bytes!("Cantarell-Regular.ttf");
+ 
+-#[derive(Debug)]
+ pub struct SkrifaTitleText {
+     title: String,
+-    font: Option<(memmap2::Mmap, FontPreference)>,
++    font: Option<Font>,
+     original_px_size: f32,
+     px_size: f32,
+     color: Color,
+@@ -29,9 +26,10 @@ impl SkrifaTitleText {
+     pub fn new(color: Color) -> Self {
+         let font_pref = config::titlebar_font().unwrap_or_default();
+         let font_pref_pt_size = font_pref.pt_size;
+-        let font = font_file_matching(&font_pref)
+-            .and_then(|f| mmap(&f))
+-            .map(|mmap| (mmap, font_pref));
++        let font = load_font(&font_pref).or_else(|| {
++            log::debug!("Title font unavailable, using bundled Cantarell");
++            Font::new(CANTARELL, 0)
++        });
+ 
+         // Convert point size to pixel size.
+         // 1pt = 1/72in, 1px = 1/96in, so px = pt * (96/72)
+@@ -74,138 +72,215 @@ impl SkrifaTitleText {
+         self.pixmap.as_ref()
+     }
+ 
+-    /// Render returning the new `Pixmap`.
++    /// Render a single-line title. Shaping and rasterization use the same
++    /// font instance, including its selected variation coordinates.
+     fn render(&self) -> Option<Pixmap> {
+-        if self.title.is_empty() {
++        let font = self.font.as_ref()?;
++        if !self.px_size.is_finite() || self.px_size <= 0.0 || font.units_per_em() == 0 {
+             return None;
+         }
+-
+-        let font = parse_font(&self.font);
+-        let font_pref = self.font.as_ref().map(|(_, pref)| pref);
+-        let size = Size::new(self.px_size);
+-        let is_bold = font_pref
+-            .and_then(|p| p.style.as_deref())
+-            .is_some_and(|s| s.eq_ignore_ascii_case("bold"));
+-        let location_storage = if is_bold {
+-            font.axes().location([(Tag::new(b"wght"), 700.0f32)])
++        let text: String = self.title.chars().filter(|c| !c.is_control()).collect();
++        let layout = shape_title(font, &text)?;
++        let scaler = ScalerFont::hinted(font.clone(), self.px_size, HintOptions::default());
++        let scaler = if scaler.hinting_error().is_some() {
++            log::debug!("Title font hinting unavailable, drawing unhinted");
++            ScalerFont::unhinted(font.clone(), Some(self.px_size))
+         } else {
+-            Location::default()
++            scaler
+         };
+-        let location = LocationRef::from(&location_storage);
+-
+-        let metrics = font.metrics(size, location);
+-        let glyph_metrics = font.glyph_metrics(size, location);
+-        let charmap = font.charmap();
+-        let outlines = font.outline_glyphs();
+-
+-        // Create a hinting instance for better glyph quality at small sizes.
+-        // Falls back to unhinted rendering if the font doesn't support hinting.
+-        let hinting =
+-            HintingInstance::new(&outlines, size, location, HintingOptions::default()).ok();
+-
+-        // Layout glyphs and collect paths
+-        let mut paths: Vec<(tiny_skia::Path, f32, f32)> = Vec::new();
+-        let mut caret: f32 = 0.0;
+-        let ascent = metrics.ascent;
+-
+-        let mut last_glyph_id = None;
+-        for c in self.title.chars() {
+-            if c.is_control() {
++        let scale = self.px_size / f32::from(font.units_per_em());
++        let metrics = scaler.metrics();
++        let mut bounds = [0.0, 0.0, layout.advance * scale, 0.0];
++        if let Some(line) = metrics.h_line() {
++            bounds[1] = -line.ascender;
++            bounds[3] = -line.descender;
++        }
++        let mut paths = Vec::new();
++        let mut memory = Vec::new();
++        for glyph in layout.glyphs {
++            let Some(outline) = scaler.outline(glyph.id) else {
++                // A space or other glyph with no ink still has its shaped advance.
+                 continue;
+-            }
+-
+-            let glyph_id = charmap.map(c).unwrap_or_default();
+-
+-            // Kerning (if available)
+-            // Note: skrifa doesn't expose a simple kern method on glyph_metrics,
+-            // so we skip kerning for simplicity. The visual difference is minimal
+-            // for title bar text.
+-            let _ = last_glyph_id;
+-
++            };
+             let mut pb = tiny_skia::PathBuilder::new();
+-            let mut pen = PathPen(&mut pb);
+-
+-            if let Some(outline) = outlines.get(glyph_id) {
+-                let settings = match &hinting {
+-                    Some(h) => DrawSettings::from(h),
+-                    None => DrawSettings::unhinted(size, location),
+-                };
+-                let _ = outline.draw(settings, &mut pen);
++            memory.resize(outline.required_memory_size(), 0);
++            if let Err(error) = outline.draw(DrawMemory::Buffer(&mut memory), &mut PathPen(&mut pb))
++            {
++                log::warn!("Could not draw title glyph {:?}: {error}", glyph.id);
++                continue;
+             }
+-
+             if let Some(path) = pb.finish() {
+-                paths.push((path, caret, ascent));
++                let x = glyph.x * scale;
++                let y = -glyph.y * scale;
++                let ink = path.bounds();
++                bounds[0] = bounds[0].min(ink.left() + x);
++                bounds[1] = bounds[1].min(ink.top() + y);
++                bounds[2] = bounds[2].max(ink.right() + x);
++                bounds[3] = bounds[3].max(ink.bottom() + y);
++                paths.push((path, x, y));
+             }
+-
+-            caret += glyph_metrics.advance_width(glyph_id).unwrap_or(0.0);
+-            last_glyph_id = Some(glyph_id);
+         }
+-
+-        if paths.is_empty() {
++        if paths.is_empty() || bounds.iter().any(|v| !v.is_finite()) {
+             return None;
+         }
+-
+-        // Calculate bounding box
+-        let total_width = caret.ceil() as u32;
+-        let total_height = (metrics.ascent - metrics.descent).ceil() as u32;
+-
+-        if total_width == 0 || total_height == 0 {
+-            return None;
+-        }
+-
+-        // Render using tiny-skia
+-        let mut pixmap = Pixmap::new(total_width, total_height)?;
++        let left = bounds[0].floor();
++        let top = bounds[1].floor();
++        let width = (bounds[2].ceil() - left) as u32;
++        let height = (bounds[3].ceil() - top) as u32;
++        let mut pixmap = Pixmap::new(width, height)?;
+         let mut paint = Paint::default();
+         paint.set_color(self.color);
+         paint.anti_alias = true;
+-
+-        for (path, x, y) in &paths {
+-            let transform = Transform::from_translate(*x, *y);
+-            pixmap.fill_path(path, &paint, FillRule::Winding, transform, None);
++        for (path, x, y) in paths {
++            pixmap.fill_path(
++                &path,
++                &paint,
++                FillRule::Winding,
++                Transform::from_translate(x - left, y - top),
++                None,
++            );
+         }
+-
+         Some(pixmap)
+     }
+ }
+ 
+-/// Parse the memmapped system font or fallback to built-in Cantarell.
+-fn parse_font<'a>(sys_font: &'a Option<(memmap2::Mmap, FontPreference)>) -> skrifa::FontRef<'a> {
+-    match sys_font {
+-        Some((mmap, _font_pref)) => skrifa::FontRef::from_index(mmap, 0).unwrap_or_else(|_| {
+-            #[allow(clippy::unwrap_used)]
+-            skrifa::FontRef::from_index(CANTARELL, 0).unwrap()
+-        }),
+-        #[allow(clippy::unwrap_used)]
+-        _ => skrifa::FontRef::from_index(CANTARELL, 0).unwrap(),
++impl fmt::Debug for SkrifaTitleText {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_struct("SkrifaTitleText")
++            .field("title", &self.title)
++            .field("px_size", &self.px_size)
++            .field("color", &self.color)
++            .finish_non_exhaustive()
++    }
++}
++
++#[derive(Debug)]
++struct PositionedGlyph {
++    id: GlyphId,
++    x: f32,
++    y: f32,
++}
++
++struct Layout {
++    glyphs: Vec<PositionedGlyph>,
++    advance: f32,
++}
++
++/// Split one directional run at changes of specific script. Leading
++/// Common/Inherited characters join the first specific script; subsequent
++/// neutral and combining characters remain with their preceding script.
++fn script_runs(text: &str) -> Vec<(Range<usize>, Option<Script>)> {
++    let mut runs = Vec::new();
++    let mut start = 0;
++    let mut previous = None;
++    for (index, ch) in text.char_indices() {
++        let script = harfrust::unicode::script(u32::from(ch));
++        if matches!(script, Script::COMMON | Script::INHERITED | Script::UNKNOWN) {
++            continue;
++        }
++        if let Some(old) = previous {
++            if old != script {
++                runs.push((start..index, Some(old)));
++                start = index;
++            }
++        }
++        previous = Some(script);
++    }
++    if start < text.len() {
++        runs.push((start..text.len(), previous));
++    }
++    runs
++}
++
++/// Shape in visual directional-run order, preserving the font's kerning,
++/// substitutions, cluster-relative offsets and variation-dependent advances.
++fn shape_title(font: &Font, text: &str) -> Option<Layout> {
++    let info = BidiInfo::new(text, None);
++    let shaper = ShaperFont::new(font);
++    let mut layout = Layout {
++        glyphs: Vec::new(),
++        advance: 0.0,
++    };
++    for paragraph in &info.paragraphs {
++        let (levels, runs) = info.visual_runs(paragraph, paragraph.range.clone());
++        for run in runs {
++            let rtl = levels[run.start].is_rtl();
++            let text = &text[run];
++            let mut scripts = script_runs(text);
++            if rtl {
++                scripts.reverse();
++            }
++            for (range, script) in scripts {
++                let mut buffer = Buffer::new();
++                buffer.push_str(&text[range]);
++                buffer.set_direction(if rtl {
++                    Direction::RightToLeft
++                } else {
++                    Direction::LeftToRight
++                });
++                buffer.set_script(script);
++                buffer.guess_segment_properties();
++                if let Err(error) = harfrust::shape(&shaper, &mut buffer, ShapeOptions::default()) {
++                    log::warn!("Failed to shape title text: {error}");
++                    return None;
++                }
++                let mut y = 0.0;
++                for (glyph, pos) in buffer.glyph_infos().iter().zip(buffer.glyph_positions()) {
++                    layout.glyphs.push(PositionedGlyph {
++                        id: GlyphId::new(glyph.glyph_id),
++                        x: layout.advance + pos.x_offset as f32,
++                        y: y + pos.y_offset as f32,
++                    });
++                    layout.advance += pos.x_advance as f32;
++                    y += pos.y_advance as f32;
++                }
++            }
++        }
+     }
++    Some(layout)
+ }
+ 
+-/// Font-config without dynamically linked dependencies
+-fn font_file_matching(pref: &FontPreference) -> Option<File> {
++/// Resolve the actual face index reported by fontconfig, including named
++/// variation instances (FreeType's high 16 bits, one-based).
++fn load_font(pref: &FontPreference) -> Option<Font> {
+     let mut pattern = pref.name.clone();
+     if let Some(style) = &pref.style {
+-        pattern.push(':');
++        pattern.push_str(":style=");
+         pattern.push_str(style);
+     }
+-    Command::new("fc-match")
+-        .arg("-f")
+-        .arg("%{file}")
+-        .arg(&pattern)
++    let output = Command::new("fc-match")
++        .args(["-f", "%{file}\n%{index}", "--", &pattern])
+         .output()
+-        .ok()
+-        .and_then(|out| String::from_utf8(out.stdout).ok())
+-        .and_then(|path| File::open(path.trim()).ok())
+-}
+-
+-fn mmap(file: &File) -> Option<memmap2::Mmap> {
+-    // Safety: System font files are not expected to be mutated during use
+-    unsafe { memmap2::Mmap::map(file).ok() }
++        .ok()?;
++    if !output.status.success() {
++        return None;
++    }
++    let result = String::from_utf8(output.stdout).ok()?;
++    let (path, index) = result.rsplit_once('\n')?;
++    let index: u32 = index.trim().parse().ok()?;
++    let font = Font::new(std::fs::read(path).ok()?, index & 0xffff)?;
++    let named = index >> 16;
++    if named != 0 {
++        return Some(font.instance_builder().named_instance(named - 1).build());
++    }
++    if pref
++        .style
++        .as_deref()
++        .is_some_and(|s| s.eq_ignore_ascii_case("bold"))
++    {
++        return Some(
++            font.instance_builder()
++                .variations([("wght", 700.0)])
++                .build(),
++        );
++    }
++    Some(font)
+ }
+ 
+ /// A pen that draws skrifa glyph outlines into a `tiny_skia::PathBuilder`.
+ struct PathPen<'a>(&'a mut tiny_skia::PathBuilder);
+ 
+-impl OutlinePen for PathPen<'_> {
++impl PathSink for PathPen<'_> {
+     fn move_to(&mut self, x: f32, y: f32) {
+         self.0.move_to(x, -y);
+     }
+@@ -237,7 +312,7 @@ mod tests {
+     fn new_renderer() -> SkrifaTitleText {
+         let mut renderer = SkrifaTitleText {
+             title: String::new(),
+-            font: None, // forces fallback to bundled Cantarell
++            font: Font::new(CANTARELL, 0),
+             original_px_size: 13.3,
+             px_size: 13.3,
+             color: Color::BLACK,
+@@ -294,9 +369,66 @@ mod tests {
+ 
+     #[test]
+     fn parse_bundled_font_succeeds() {
+-        let font = parse_font(&None);
+-        let metrics = font.metrics(Size::new(16.0), LocationRef::default());
+-        assert!(metrics.units_per_em > 0);
+-        assert!(metrics.ascent > 0.0);
++        let font = Font::new(CANTARELL, 0).unwrap();
++        let scaler = ScalerFont::unhinted(font, Some(16.0));
++        let metrics = scaler.metrics();
++        assert!(metrics.units_per_em() > 0);
++        assert!(metrics.h_line().unwrap().ascender > 0.0);
++    }
++    const SHAPING_FIXTURE: &[u8] = include_bytes!("test-font.ttf");
++
++    #[test]
++    fn shapes_kerning_with_shared_font_metrics() {
++        let font = Font::new(SHAPING_FIXTURE, 0).unwrap();
++        let layout = shape_title(&font, "AV").unwrap();
++        assert_eq!(layout.glyphs.len(), 2);
++        // Two 600-unit advances and a -120-unit GPOS pair adjustment.
++        assert_eq!(layout.advance, 1080.0);
++        let ligature = shape_title(&font, "fi").unwrap();
++        assert_eq!(ligature.glyphs.len(), 1);
++        assert_eq!(ligature.advance, 750.0);
++    }
++
++    #[test]
++    fn visual_order_respects_directional_override() {
++        let font = Font::new(SHAPING_FIXTURE, 0).unwrap();
++        let charmap = font.charmap();
++        let expected = ['A', 'f', 'V', 'i'].map(|ch| charmap.map_unicode(ch).unwrap());
++        let layout = shape_title(&font, "A\u{202e}Vf\u{202c}i").unwrap();
++        let ids: Vec<_> = layout
++            .glyphs
++            .iter()
++            .map(|glyph| glyph.id)
++            .filter(|id| expected.contains(id))
++            .collect();
++        assert_eq!(ids, expected);
++    }
++
++    #[test]
++    fn negative_bearing_expands_ink_bounds() {
++        let mut renderer = new_renderer();
++        renderer.font = Font::new(SHAPING_FIXTURE, 0);
++        renderer.px_size = 100.0;
++        renderer.update_title("j");
++        let pixmap = renderer.pixmap().unwrap();
++        // Advance is 45 px, left ink overhang is 10 px at 100 ppem.
++        assert!(pixmap.width() > 45);
++        assert!(pixmap.pixels().iter().any(|pixel| pixel.alpha() > 0));
++    }
++
++    #[test]
++    fn script_itemization_preserves_combining_marks_and_neutrals() {
++        let text = " (A\u{301}) 日本語";
++        let runs = script_runs(text);
++        assert_eq!(runs.len(), 2);
++        assert_eq!(&text[runs[0].0.clone()], " (A\u{301}) ");
++        assert_eq!(&text[runs[1].0.clone()], "日本語");
++    }
++
++    #[test]
++    fn whitespace_and_control_only_titles_have_no_ink() {
++        let mut renderer = new_renderer();
++        renderer.update_title(" \t ");
++        assert!(renderer.pixmap().is_none());
+     }
+ }
+diff --git a/src/title/test-font.ttf b/src/title/test-font.ttf
+new file mode 100644
+index 0000000000000000000000000000000000000000..edad53ead20148de6b89f85b53e6bd7116bd3362
+GIT binary patch
+literal 1356
+zcmZQzWME+6VQ64rW^iy1@DJA3R7qoCV41_fz!2sh9O|SnQ#GG~f#nN`?;osh<jUau
+zhk=37gMon|Avrg(fYFFCmw|!t1Oo#@M0!qTTK0|usSFHECJYP=vocZ>QzDlwzQVx3
+zaE5__!7L*qHIX%qDV%|Uk%fVQK_w%%q=J9J|GNwfj4K!z7!-2ylM@+cG88c|FexxF
+zFbL%)RunLBF|aW(FlvD0^AdAY*LA)9#K6FGfq{W>YC(Q+3B!FxT?Pi03<d@UBd}i>
+z85r&<%WRG3xB1Gz%>06Zfq|h$bwdM;{y*ox1=9+qJq!#C%nVE*Q3eK(K4yjg77Pqb
+z@BYtW&|q2t5`oG=C=Rd)2LlV3W`OI2$bv{_#xIN$7+4uVJ_GUbVNjUE<?Ze5?Lod{
+z$bz_mS%Co*ns9lr91~Ln0|Ub^1_lt#6u}_LIDvtSF^)lm=^X<X<Dvhc_yYNcnSp^p
+zgn=3CN)ZMY1{ZMbaxgG4urMevI5LDWq%mau{|`13!pr>s|Nq1P2mi1AKMxWTP>VtS
+zU}a#3@^}~|8Pphz85|gVVX7FvFzsPrW?(Q>6jWsV@{fmU4+A5EBm)DJ8dDcY+*nai
+zQId)G?`NhiPzZA|Ffe97bbw^I7~}pe0!0HOg9rlyqYmR2m>v;EiGME`zd-eX<BFMq
+z0j!5<-rpp!9#AYYPJo!kt|+LO0&>6!<`%GPxftre{s);L0dp+_69YSg1XP@vL5@Kl
+z$_9mtEtJg$7H4K)WZ`6BWH4Ze1%)IFCj%1$A44yc&CFoKFdNEdVQ^r$4rQ}}#Qlph
+z(=+oDa}<Iz5(_f((iPk?D@sa>QiD>{OLG#7VA4=osH85MEV^a|s62x|LlHwJLpnny
+zLmopSLk@!iLoh=ILn1=~SR|c6fx(R-lc9p4grSt7h#{3Bh#{3BouQN=har)n2tzlj
+zUR0gB1oRTJSpiKy1GXFkjx0FA0nU*s43-R@3_c78;OUHuL50DHfyu?qCxn47C$S`t
+zfe(_${{IKZ8e?{9Q62+GHz-#zGO&R2CL;qV$MS$xGBOA;FfuSQFflMPF#qp>rU-)O
+g=47TPqL>TH5fF1h=7G#-VPIomVqgWE&ceU|0Pcm_CIA2c
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/.gitignore b/tests/.gitignore
+new file mode 100644
+index 0000000..1436437
+--- /dev/null
++++ b/tests/.gitignore
+@@ -0,0 +1 @@
++*.got.png
+diff --git a/tests/parts/combined-parts-no-border.expected.png b/tests/parts/combined-parts-no-border.expected.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..b34d1818ac5fe2f77840140412dfb16208b104c9
+GIT binary patch
+literal 34957
+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
+WT<PGKS<Aq{z~JfX=d#Wzp$Pyt<|ncM
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/parts/combined-parts-no-titlebar-and-border.expected.png b/tests/parts/combined-parts-no-titlebar-and-border.expected.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..073ea20b0f8dd574fd7d62ebc37052e91ffebe84
+GIT binary patch
+literal 30878
+zcmeAS@N?(olHy`uVBq!ia0y~yV4MKL9Bd2>3=R9u&M+`kq<XqIhEy=VJ;1y`C34!a
+zkN?Zx^`1DhyvRFwUGD8|P?Xs-Z<^Qoc}B)c?|znT&#GG1Zk>JAf7{v6@YvF;q2YgD
+zE8KpzYW2EZuU4)8S2`iL_$ox=ztxFtJ6}O0>Sa@I$AA>amR{Y@w<#B_c-^j7@$5Iv
+zAg08AUEiED8)C}3U)LQ+jUNphP%5En%K2{rNs$wdg#LdFO11yPzykkDRSK`xYp2|f
+z`5J!;oFMCUJY&AbbKNux|2usHD5Za$?=2Mmce=y2v!VYpb3keQ?{|<fnV<w;Zvjr-
+z|BXE!t@>X8O7`|W;57b!Cdgn3kiqhYzy|-%nY81TJ<F!tb-&6tf(_o^t+MV{IVi#Z
+zPuuqMd;&NVaC!bo2N|CRGA#bA+5d@PJNIU&e3bVT3je!W@%FP-^`f``xI<j`Ub*u>
+z$D|#v;#qH+h3`F)^Z9)$*c|(5D*yJX6khG-0f~F$e9ljuU9S&v?f=qAKfX^ovVW?|
+zx~hqwu&AGy`)_T|=k<wTjh3E|;+=*5hk?v&$(g-6PUH5U=o`;mA+quALi${uf1*7e
+ztr7<X(q4ycKd)~(+kMFFe-tQ0|F2g0xL&nWyjA7jR+Yl5+#nO?>EHg7ee+p-(roc#
+z;Gig;bc9>Ev%V9e=5uS#?A7zybN_A4`F!ZcGge68ESh+PTd7mrP3V8rq#ds+LGFB>
+zFuPv&_8x_8m5w=|n{GT?wff)w$zWA3Li!yL!-_%ibUtZzJ@4&32HPs@az5XIgkQm=
+zio8h`bt)eZd4T*EZp*zXcU_g(?L8~NX8qiFws`Z|&&jh_ulx1iPw0HV%DmYs^W;7E
+zC`_sd^nA1`9TZK|Z$5KPoh^RE?EF~};!gpw!(+exZ&isC@U)o#)-xN#-m^lb@M`Lb
+zZ9BPc|H;1b3}QO-&1a1{pB+HKw0hoT6*&(few9x4Nk@t&ANj1@S<mYk!@4PV-61o5
+zt=l&C+bR`q+f2xnJ7LD3GMjzV+0gL6_39wi%$|=LRX#dQs!;H>u?IU&YeMel|8sKV
+zLcsoY0O`DQ-t7D4vtSF0uZI4Qhw9leU*#Rlke?HebbAT?Kd*TE*?&WDF#Ndzb>IBl
+zcj?j$x9^+>*$oO1FOW-rdono)eV=^fFRJbT4O4Fau}_;V-kLj49_nO<Z95TWeBTUq
+zylUrf&qsBW7$zL~t5Rt1$>0I?MxDyXMH7zvPd>5jXZ<O#-_4OtVaQ=lfVhPL<gu92
+ztN%+uerNCi8^+S0!hm929ymz;Yo^@(W1k9j6xbuu47V9>JgeKrxPiAJH-|Z4_V1g|
+z>OgVvUms+^9e*K)NfQvpF*!i|{0J0IPD20vLE)qb4yQZdNSvPwbsEDBwgYAi+cxqx
+zfJLB@6|dUKJ_&3bqXMTVg9np?5W^$}xCM~J5*IS*M?J?)v;X`zK^g3M8c6eBh>wws
+z1qs{+^FfKNSA{_ZVx|+^$&3n|44@#b0|kwZx#u1Ym5=`gHs$`4-*k5W5wr9Cx$n|v
+z|Go)!C@cV^Z!_FDX10xSLodYLpoj*U$S|Qrg+WCT<Y*8V;$*M|cl<%|4@#?@D*xo2
+zww?WNysa|u#<QKEgbfZ+wgWH&lcjHi!e!e=km<?N44^n&x9in^E>J!J8PDM9;UqK(
+zWSNR0Cxa&_fFOy3Q2~_9izgrHb`tu3Ug7q$|B|=&Xn-@aJt$2wK%)?3D98gFdvkM=
+z;hy1b0F}T0wID$bj!}?bKz1Sg1&$0zW_Yd!F0AG|Zae#58QC}B^aAq_$O0t0z|6CM
+zK_$!o>!5@<p+yDB78n!cIdEKo<EByN;~hv^R|ci^BWC(sw{6TpKKi~HoOaMWl%fU-
+zyqw81LAEi1O8dX@>Y$Kv5)y0#Tj#<u3CUuZZIFBhD(wP29{m>tWrU>J^_{u%W`jx-
+zXy`GZ_-OW-BWBx9`atah1t>G9Hu|;S4V1zlesf`&)WM;m*xBJAgla1^kwYVGzl+fS
+zeo&+d-u~l_9BH8Z0Zzy_)QmwkOr8m1_@+$))4jPy!neUi`ufQ&DoRYA9!g3RTwDYM
+zA+!P~SfE7(DdofC4^)xJgW^vZ9Dm?47M#dIo@BTU3cihC^HbCyo=j1j>6w-^`-}?M
+zA>cB9zZck7N=+ROLV}Ji0)i0l3WDv21OPOJg1rkVf5EwoWmE3I`5VBw>@29zg=Sx<
+zt)O5=v3AnT6t%UcM#8tjq72X^#H0Z7twLwVf+<d5%fW6y_}vNYI&ek-7koSBgX)@p
+zs*`@yGu<@%?|%bSyFO1t&ElXec+6~OCn#vaUWVE|`OK27ZfPLS%+A~#i1*!uCV_+7
+zg+<U&v$aD(Nn<G}46rx@?0;BsaNbwwzmVr2`^KEv|J8Fo>w{}iXb3<{7vHob>DxEd
+zjKRqZ?01m;$DHMV1%R4)&);YIS4%AwQEGzv-9t$Ul+HLkU05Kc1K2LGuPgE<{h03Y
+z=szbYO(%lVwA=}JkV8r{)ReX5+6kYiY>=gL|30*X+HSV>{*|YKL7tlu)WPAU>B1t|
+z2uf~<ti<2}D)k_Vi+$1&P<r+UrDsNL=@}HnYQ`IVA*m^I?ZlZNE0<+1+InoU+*b{V
+z2Rr?1l$MHQt#x4mc{7Mh(9uN!l#QUd7@Dpi)uN5L=O1sCkN+7!Wj7*Kfy)Qx1V||d
+ziZyWVIq73G`I^*B&+Oi7QkP9GMm;v{ujB#ssy=`Jaom1h5ZBf)FHN{Vp|*l^F{l^;
+z7lPpG7*sClPdxIU8B{JEF#9hAEtjBW1t<-Jk~1_0XL_bxic&VtTx;knyw-GC=A)x=
+zZ;tMGwQBXe{q;ZE>la+}(rk^=hI<v1j39P`3w&600xG3;dOnI*>io|RYQHq({!`sn
+znFne(K<ibIm5}HJXBCiF*P0ql&YYD2viY*fM<M->LZH6o`TO_(-n}1~y%b_IC;`I)
+zSwRU=KtikEcj}$b)xeEUd53Lh|1)p<IUQVsAzB8~;35NuZ<A!)<6bR|>jHIHfBv4m
+z|EKh>b&DYu<M1+4vjQ`A!Hqj`?7~X_lRi1gprQ#9xob_MvVAVQWcL=z%v{zvz3%07
+zP>;Ln-@jk$|Idojj=dh}wGd=`5Esby4h3-D0VOU_84amsVJ$6i)?ox?odoPz2b_wJ
+zn8D-sVpQ@hwPl$}v(%0iK1q#xmI{gF{l8Z4U-a54YweY&m0N?n7EW<;3Gh+`S&UR#
+zLMn7vYmp?Y7jJb-GlC?oBpG**)$!j_LE{PY_V535djFEwR`3u<j%o*3t%xN9^CL2_
+z11N=oo42s$39KxJ6cq3T_SnLxPg(!>CjHZ);jv%;{Cyh#Pc`=X#Zp;Nrn(Z<2`)UA
+ziYPIG3Mxp6g_@HmsDR6722k@3Tt2gJ0yP=z!37lqtZoOF9+3PraV9vXGiOO0pI9hU
+zd2@PgB%}b*|Nlw<<*vSUuUCM=`<fRxyg_9cas>fNX7AKN8LLs{BU*l*0B-<-8+@Q7
+zb_85CKnsvFDYMi-DeZ_wU(e$cr}w=%U34`x+_t{{=k$8d>!l^J?rW!l$`hp~P}b6H
+z1yz&af)muRg0wse?LF`KgBs1?`WTV78gq)F?KW@|AXyqx_2o<kmzAJU2bEpPpj4J3
+z;~w`dHGUc-bDiG*$9vbh#h|1%C1}M~AwgJC1}aVj1wl50N)r`E1(2V?O<%OKlRpL0
+z%7?UZkqc{34G0SLnaessWv5}E@?(onoAiHgf)pt6|DMKQDwU1B9+<s!iqqPu;JOKv
+z$|tx$%5FsVf;5VmF^Vz;c*_pb>Os`Rpi=Cb)XbA6zFV%%Sk_r6BYAw{^xB)#pRQWH
+zuIk^vPx}8St$Y1qS0AVlMXEI#k?JW(`~Okhq#g4?{YY>f+>kT-KRdV%W(N0cKphmM
+zLIqr7pwv(%zCDjmSoH0Ab9$c+q}G^T|8sgtto!xSD^Z$D1F}`YtpHG{t56|pXZM2J
+z9VBFJaHu0!m7`f3)M*~g+WU`yMkc@=_|dEl?zX8Jk7jL9vv9Q59<8-UYwe{1;I`6e
+zt<B^B8e)WYtw$T=kk0OCgB&!Ha$~eXKH4B3?Q4(rwMYBfpkcJpzBXu%2{iN%8dDk_
+zMnj&07#&8FhD;-Z=LBwy_O&5XFr$6#(Z2R*UwgE#Jv#XXUV=6{`GuIrAD#RHuYQ3n
+z3;|84k4}E|j`p=j``V*@?a{tAc%>sJXffF6l9dVt^yPk|eeKb{HfWhLXk8R&p%8Sr
+z<7i)dw68td*B<R_kM^}k``T!0=12S5qkZj-zR*1xqie`V*N~5{A%||r8SQJ2_O(Gf
+zMn|`Yc>b{;-5xT!^J@cWt2}74H)vDv=+3XvonNCnzeYE8ZVemV)H%AT6MO&*>HD=u
+z=e0-YwMX}BkM7sj9_?$7_O(a*+8&VOkVgC3qkZkszV>YJc^{*vtc;$rGJ1g0=mAR5
+zW5PxcP=cPlH`>?!Q9pV%+UVJ63E<-vK@$?7Gf_cH9!JkcBjVV@(f!(^`?W{swMXZ*
+zp=Z&Lo@kmp!soSBj5F6>j8Zlx;Y3sLLEqG9kb{n(26gtcdoyRvSk?*N={LP{=Jbb<
+z6HQ;O|JMaRycTjqGxP*m*pcUu^W-6C72`fk)n)?tmIBBL*xNuGD?#VT&h$*1G;_<f
+zjJ4piilef79-lDr-SfqJzX{|()9dwruV0CJxvLL!b}i^EY|yE>pfk>06u<|JgHDHr
+zoTUo6?*V$?H_~~*cR(#P@ZAg0gL6UFZUY_8d<GQapaZ{Wz|WA?{~Dx!6mnef+53NZ
+z;S2WRKJMUvoEHqT7k29b1LzRfd9%?^3r0T89kgr%(oBM$TaOymzQXz+h4c?XEWUgH
+zuk6;athKNsb0I#S1hyG`WG>_oeejh8b)ZX8&<<ywH#-+xm_YmtI)EE?Vz1F;bT5BQ
+z(*KqOIWgD%&tdxj$YHrSd<&jo1RcT+x<TX)#tFsXn-E|pj)M;90^NTAK9X9+_$2fc
+zchCvNF4?`uZJrrIY<(>Mzrsrsd|IuSBKWjg*n#e#qmd!^Sb%&Axw)ixGWa-m^w_;~
+z9(sKT_@Hy}fz05`0Z>lVr2IJd`QYQ+G52>JgI&D<IwK#p?dO^lfBlcckW;Uh+dPGz
+z;toFL8+_C?=#B))wE$SMjyh;7b_=#6)fqrnAb?{O)Z_*o#Sgj)V9T|N7tZphz$wV~
+zZKnTX@HGUWlYhbK6?{@X=u~kA$hpVhBl++63*kThA9Q&JIQ_s&<};wE1RdlKJ!2f4
+zjgFXY16}#^H(nWh$wLPR{3-yj{Y{WV&5;fuh9@MJ2GDgj(9_)KgHD_lMx5rp6LkJD
+zC>_Dhkw;VzP-lQjEYQLIN6cn&LT(L_@??PB`+#IOI0!&zPAh_UErNmobPWXq=(y|e
+zlR?+_z%L2l1m9EwzJdpwe<0VwfYTM?xH(wqu@QXv#W9%oRl%l1E(ZXe;|{kLdek)}
+z-$L#+VF2IrGC?Iy1bPERKlp@kaG3$V;|6x?3gnbKq~pHNfRFu#-1HG1`?Y?q3h0zb
+z@RcHv%P+vkOnZO@!1qm{9%>G~o`3^%J;6rkr5F4uu)9(qr<#M#*#`LveDeeN?0#qf
+zY=honq6``WfuvoCCqZ=(*!SSD1z$Y_yPbg9^AYr#0C!ND?#PW3fnE~;Ev1fuGB3P<
+zgr;uL)gry%TYgrr`?cQ>a*GKx$3VBxK<o!aBqT^7<1yH7Xn|EdpbLc1Yy&56aLEjs
+z@BrO!BLzwoFmJ%hTS&rzY<GoT2m`$U2o!%TH_iT^2j8%Th(G9+0N}IY!AHe|0u`L0
+zz%rmqox(x)F+npV!~(Fjpy~`1XV8+i(B2bv9}o}drjm`IySmPwH3LT)qU3{S6i5Vu
+zI1Hf6pupCEE@}c93OalnexDAA1M$y0(490$zF`BMcMrbp>-llB@0-uUZvz3j9)4Og
+zXv+quum@ia1*!?52EvMLm=7RX{I@6Q8YWOK<A+|u1ilXlbe9%1mxJO4*#ZzBd_mYm
+z@O>p98$d?FZeW5HVEihe%OF6vm4UA_a^6-McoTA+Q8DP8e#CuAkgH_Cd73{3bV=BL
+z(4AP|OP3&LjDoEJ8w<IrL;)P^E1=gf%?DqR2DyfbeG?=Kp%#EL#a~b(19Y{OIH)ZE
+z4pES6!7T$&dI8<7^H=5LACE__ik<(LgEGPt@O@u-pgXa^=@a2zaKQ%(npdm-zXsja
+z1-|10;WUN`M<92IfztY<BmaXzw|<-f-$n$xb&LVz9&q9S-{S@H?|(1Q-A{kvhwZ~n
+zfja6q$Wb%Ej;aIoNh%TBlHR3*uC)SPU<SGq>&RcY8K5i7CV+2Q1BH_WD0yx^+kMLH
+zd_U->B3Mlcxd;uEx3ocbN6C3W90Iw52YLnCf6J8HF|8=J!!J(*-D~9sx|e``64c`k
+z;EUiEO*#^)aQm4S_~yIk$Dud6v2Oxhn+9sP`a#QBIS)`hcfMccpQ%crDCk-~Bk(m~
+zP2g)oz;|E4Zljw3x{VHUqgyfLX1b{=>vn-|;Ir)pJI*oZ^B=IbpWrI5UcK|VJJj?z
+z0Z;I)ahpL`-KB3lyT2_rP6B)pT;4WNJ0Q*il%hcXO;q`~Ua@oaJkX7Qw(Q`$^;kEa
+z<xYa#MmHCH1D(R83P<o=e5>a%gRZ)h17Fm~oeWV`dbQgPbZK6kgy)}Z&qu4CH-awV
+zBjTdII0dkUu8E+#_&`ZEbkdLOlfZX%fiCJ}b=r0|RDVkDKi!<qi$Hf)#eQ9{48CDY
+z7jzvU=&HYeuG@ZY-vsg>_;w2w(9L&$qCFq2suu*gbK;F>_fMJqj{|uclz!i<cGhcq
+z#(Y%*-N2`Bbo)>BP0$r6zxq`>>-9n6&Y+tawYL522VGgU>(zaCq5py^g;)1;fv#E%
+z-+Z=S1$66SsJ@ivANNT|LjPxhqVWD1v;UHy%a_7q6+8d)Oxp44J}8?0?grgKweHt_
+zSE2B~yFoGWUjXEg)&J5b9|`@h2)^@C0&L!YW6wvc{u_V{v!4UHb8OXrNzk2-7N9#H
+z=R+<!tmpTP`8uBs`(=_#!Pfsh4sz2{u)*38gRLg*c(q>?<a+tz;QJCqC+&DuFEe_P
+n>gX-Apj&l^${o4w^(^9(6R&J|lbXc9z`)??>gTe~DWM4f4>;4i
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/parts/combined-parts-no-titlebar.expected.png b/tests/parts/combined-parts-no-titlebar.expected.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..e2b00b74613ce40516ccef68edf41b4dde92a4e6
+GIT binary patch
+literal 32874
+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
+FO#phUQa%6x
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/parts/combined-parts-scale-2.expected.png b/tests/parts/combined-parts-scale-2.expected.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..5d44ca908e10254df63189db1fad3ab2592dca77
+GIT binary patch
+literal 104116
+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%0A(hu
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/parts/combined-parts.expected.png b/tests/parts/combined-parts.expected.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..b0c34f70d4114b23ba32328d1b82719c2fb8c074
+GIT binary patch
+literal 36975
+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
+Pz`)??>gTe~DWM4f18|x?
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/parts/part-bottom.expected.png b/tests/parts/part-bottom.expected.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..7bcda408b2318ccf6749bdb513add4618891a87e
+GIT binary patch
+literal 2031
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/parts/part-header.expected.png b/tests/parts/part-header.expected.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..ea9a233d38cc3a8a434c15bc9b42c95b1b2b299b
+GIT binary patch
+literal 675
+zcmeAS@N?(olHy`uVBq!ia0y~yU^vCVz@W^*#=yXERd4De1_q`qPZ!6K3dXkwm=~x-
+zPCNGTfBC!K6K9qec_**Sy}b>JGJEDt^IAX8$XMy!&$8`VRm<9~v#<IeP;Ox03TR+B
+zr7ZvN!}dAlcTc;n?dN$pF{bqD|G-Rp&E+pW+gD%BxBvRm|G(}6MoyCjjG7Mu9T>F&
+z<i1U4-*fNWwQI+{cFkM8?pOV>Z+ENN+2em+S#JN=yn)TfLHI+&0;Z=&<^I0#pYiqY
+z?t-hK|Ie>&f7t%-A*cTjqXmqU8>Tb7>bC!NasG|(f31tJhK9$Q@f_y=|5te4houKp
+z9xMf0ad6|?xB8D)tzK8fH~rgp`-dz2>wm51thhP7vUB>6O3&*ceYWhk%l}`!|M%|f
+z*Aw~cf28N<=G2IV$Ch6GT$)+`U-*kqf909;<+0z>VoI-up1*F<w|~L(y3XkpNgn-A
+zKql|IR5vN^n`-<eki0%m)y?TOo*;Ag8oWr2|D<|0G(7g}p#{@xPfj-hnabTfq7+{Z
+guMLHS#vkRr&<4&a%O5Z?FfcH9y85}Sb4q9e0Q%-r`2YX_
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/parts/part-left.expected.png b/tests/parts/part-left.expected.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..c0d4d70c463bd860ec25354942be3e332468045c
+GIT binary patch
+literal 10277
+zcmeAS@N?(olHy`uVBq!ia0y~yV9;S;V0g{J#=yWJlv%>dz@Yxd)5S5Qg7NJE<^?K|
+z(~f=oU;eK5#F^zq-pT87Z*PO5%$|AEyw=Y%GFE!`vut}-)v|W$?5qAZvwuwQe6Bjr
+zH%4)tKsbkh!a4zg1_nkZCJqM&21XHu1_rJVCLePi#jDMmTw(Sx=Mfj<BQ8cJ77hUg
+z1qMb&4i1F|CYAt@Dv`ogs8KevcQ`fdZ~_^_!U9$XRw3ZP%Jsnot_o^lI0x85ut^MD
+z0uGE^0gX&HaWRVjQXf@zrVEF6Xde*;+vm{Gz`(*H0C5&m$N~n@AMEI+DL8;^g*tu#
+z10zV)iUapMwU6xgvC#)Pzp#~|u$2Mi1F#QS1RNNdG#psD0vh>#NJETMnKyZdQ;ecR
+zj3UT1Mh*dxoh$(jOd<=ISYI@7{n@(1>CfpS#X{%RK;Z^g2R2Yd0jy4Rg#-Jasrb}E
+zUH77a?}s<cUSFi3V-gT(XaI)@(+UShtqY8@AErOz`lv5_-qU7wg&Eu*kPrr0%M#GY
+z6taNX>Vf`IQOpPfxsHiR!-0X7V*wNE3J3O*1Mywpa8du5^XTRgQ6@+@gKTAiM_523
+z-;0L*BH<nNGb{Wa-8{0nQ=6qj8xj2rz=?!QWC4@x1;%>Kbprp5KF&F^85D6G;Pm9+
+zz`(>L010IVQ4I%Hs|C#eg22&h*_keUUTqyH%_%@4R{@%uv;rEqN*vh#EX5swtQ?~O
+zI2wSA9H3+%qR=qBQsA!e+N<Gzxrr(k?ylbVYW2TXqH@Z+(D<*R|DA}+ecxBD|Fx=K
+zk*FM9eKoxH>V5&DN{PL%R_}Wi-$7K#6ZbVV{;U2GqDr&%zgDgPB~DZcIU2m+`tHSO
+z@Pg~3(bT(uLG(q#XyE{EK8+R*qlE*gO8{-GjusB1g#)-(GFmu*d!wU;!)W2a0UAp{
+z>VS{797YR=(ZT_Jm}|7<Fxqk$Z8?C(>_PJbpwWNOVDjjg!|0d;Xv`KgGc!8o0G+ZK
+z9dj7%R*ZHlM!OZDd1;LK+|j~ev~U<L97YR=(ZT`G8kNy*#ejAzI2It56%m?<2d^y(
+zXy6K2zyw*l0AJ<f30f1TuucH78VIzujDbl5vLdX+p%%QxKnT3XAP%%%39%Fnv}B11
+zx)Kev5Cmc@WR=!uA<z<|aLAe^@Omy51<<OtfCdK8Dx)jll@`&El@>_L;6N(D13C<h
+z5cf7RL6labE5){e?GtG2M87cHt%y}qu;oyo-~ugA+XGq+A$(+WC&v0J_=+gV8ZZrT
+dus*40Ij>Z#9Q{c$mVtqR!PC{xWt~$(69D$hmxKTS
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/parts/part-right.expected.png b/tests/parts/part-right.expected.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..43f1dc989d9f8bd0b433b4795176088700e41375
+GIT binary patch
+literal 11162
+zcmeAS@N?(olHy`uVBq!ia0y~yV9;S;V0g{J#=yWJlv%>dz@VMz>Eakt!T9z7^8%H~
+zX~#bPFMrp2;>_|Q@8os4x3@u2X3xB7UhC%>87sZ}S++f^YFWE=_ErCwj{yr9IaMw+
+zum~AUaA0ENk?=SWlX#$E=b@Oybq43t=1u=OUD6@uW5EJOP7{SjHkAntjVwGW2?rV&
+znc2>WvYioqcJs{Una@-HrLqZx+i+zZU;!B>1u{#>U;;=L&kSvz8QNzy&rCNyfBMg9
+zoplvF7aBM-9GHbN9GEy&5)>Gj*@O%d)`3tsSmE>3f2m^Odn61Pd1o}Rfy@)~P+(-{
+zlrR9>`;4o&b>|_Q*_Cn6;?oL`dNT-v6|zVn`2wU8*$<I1AA=5X_&6}DK|I1D<Z%G(
+zU68E_>kPtYz+IP_z~r`oQTRdwn~6drNFB(>5^#0TQ|3+nIXyDwqtO8lp93sD4$M*$
+z9GD@-2|=uF0K3lY^PDsL&phgy&gz!HqPBohcmh}{6B{&KP(x2Fe2<O+lQPsNAQKJ1
+zK@GF`eA>LTHtL`CH}80q+9)W|$O#W=kn_M1QryZ|+*)b&Ip>+>%=(!}MfJIRAYKN=
+z+l2;Dw1L7JIX+H;<0CSG#VvtJ$^aV0pcny%bxh)cn8bN!ZDv>cfkXN<ld=Jm@P!6W
+z4{#uYV#EWK5T0={KjZqG^X%rCVx#{?-P&<t5{-g08rXasn0P@-C17D4E&&PXG-wcR
+zI>6C$fW;(%36vCg!Kw%bAxP<H5S||m!l9lD<GzN*U#<VqUjL(rsBBPmHM}<T|3mqI
+z4^J}^lMi2q#(xd{+g|^pU7wwpf?!Q}?bYzF^8X&n?~@^_BpUSqfs$}E26$&Quz;&a
+z9F^H<5*kfHNX^5Oe@>5<LWG(_qxAr@8r~M|Xc8JtLd>XrlF^!Yv?gxYc?h{<K3a^9
+z7Nd|sC-~6HXlrz|H9FcF9UYYbjaiz22b{4CZ;m!4Mw=3&O^MN=#nFMS(dP8%@cQWB
+zF4A1@XqR%dOF7!59G#^c9i0ZPmKhyZ8J(%evF2!WhGukzW^{%I+j1Mo5=PLHK8%Hb
+zh|%dyM6EnTYK<}o8!&;EQksC)dV-c_LRN5s7Yyz^WTOsVsfbYT%?w$Gh`#g^Jb?mU
+z5vc!Je>1{8lfcU$L6fqe6_Y$FkY%4>4<HtFUR%BI)#_jT|3C1@%YfGgLf3!7RyiJM
+zU<57e#A18|WHlya9VmF!rb+^6kt%3~Ds0^*qC~Nig0GBpfUmVgUh{Ywd69t~QwDUA
+oB6uMxc-bS!A;>E!8UG2s{mff*tt4EZfq{X+)78&qol`;+0H<@fDF6Tf
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/parts/part-top.expected.png b/tests/parts/part-top.expected.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..1b754ebce96d149c17ee0e516615fe63f3620f32
+GIT binary patch
+literal 1952
+zcmeAS@N?(olHy`uVBq!ia0y~yU{qjWV9?=UV_;x7YL@EHz`&mF>Eakt!T9z7^8%H~
+zX~#bPFMrp2;>_|Q@8os4x3@u2X3xB7UhC%>87sZ}S++f^YFWE=_ErCw(yO82f4@7x
+z=s)jO*6n(=>Ur9~a>qaC)j{lf?a%h&kLu+LK`PS?{}(I#doB<jTY9x#^z(iGkN3Sn
+zdjH=&Q_p{-o*%5pKlxv_;=k<9)$4Y>s<-+a&-^jo9jqvN#{Zg*|22<RtzP%*{;5CD
+z9sfKR`fqt8G(7g}oip`(pXW1wobUYSxDd$n{nLK-r~XS;{P(!?zXVuEf6~9?8UHOh
+z{zp8z4|e$f$TR!r|Lkx4(XagP?UDWScf4Bl-yS5i-S~f9$A5`O_x=97?f|)h)$qU7
+zv-{`%{8sq)_sIU<ii=>;`=|C~oY~*|bG!4O-yQX~9~TM!uX?m<^}qMV|Er$4Cja|-
+zW<M|3jL!O*6%WDAY?>i{?$7Bn`{(_<?)>LANYkNCaUZbfqMorD>(BXl-T1#1NPN9|
+zoWaK?sN{EJ{TY=9&v2*x`+BCE@8f#qf2Bvb)#urN+ygdsk<t0nHucY1jsIIcb8Y@{
+zT~OcZV^imIe;fUef54$w_w1)JSP84KzSZYNj(c7l>Gs=`@Tju$x$3;h6$g)mhX4Ja
+z9B1%(&Y90f=TGlRc;=e^FSSFw_s4a?^Ybg>9$9uiSD80?$E#JV;{-m>Ia6$O{-llm
+z=RY&+Wj`NMj5B%U3UbVxBgI1JJ#ExK&H=fq)E=f#9b{~JT*<Rm=Rc>9bo<%VL(KEF
+znO))c$P(njQ#K$)n`fpQpFe4%{`t>L@wt@;1@z}sTm*RoWa8$|bm8!hbm8-!pwN0|
+zIWyfjd`7zQ`LubHEB&7R1o`WaVw}atMIZ-*Ow~RD*P^y=*DI~hInQpM5q);^%;uTe
+z5D(Npb4{LSe}r2tt^^bkAP+j(%--P?qqt7syxKYeuvP!%pIOe-25S<1#`QVp85hJ`
+zr}w-#^Vw-n!XsDZdG;T39$9v39}#_Y^N8ppF2+Y(A9Ehvgaqomvo^DL9%|TmC?;{<
+z*_gz22Io)O%&z=*ru&$U{*lk>Fspq*mWFqL%mC>xY~A5xqh5G5^#Avn&r{YJgwN3C
+znW23~^ch!iE5s-p_0N0Gbf2?P2N_}laX-QkrX!*d^oR>&Nc~LhGooxTgl@<&up$3a
+zAN>?QuQm^62up`H2yqC6a|nPO22LXD48kQqC}Eue1cifL1q#&X=l`5OQ|x4;4~hbB
+z8}-803bVpi1_)vVxrPO5)^nA0yI%d5`#cBYARdT`2VxQ-2oy~7CRfIRVu$zRo+I6E
+zHu~W36n(^1*vi28h>MYlg+oBWp#fw#BS;XGbAN+EhZ*Ea9tnel0}YJK&$vKbkZ&u^
+zKIc5EoGIR0X?CPoNMGvXo+HIVAWuPJ3vM2q@i7OSk&Vu$fed1UnFwZpy$<oW<;>@)
+zaVF2WV1`0c95mcO4rF9vVFA;O90CgK1j1v#{%_xTsDY806XZq*Ca{4ZE1q#Nqd0UY
+z)5keS_WRiAf1CqKQlRwEzyNbz0|N^Ohl2wHBp6~8LBXk4+{(xdGHyacBMXm&2gpzm
+zH{k#{?SYce^OSkhe@>sNEpXoR&*>wdg&>jb5Tgh}4Io1W1V9uEnB?GaXaI$)J=m~D
+z79JI_$tnp4z!rc~0Vpj%@*vb)wKx-S)?NonF_6@w-~cvKL4kphkww6Pfr*L3p@D%B
+z9K6P0vxE#LI52UlBq)GF1?p~iatCKNeJSRSbm9L-ANN4>v^F&U!NChNnUN)+fq{iZ
+zL1BkeOzGACvCq0#cvKP;8rf99=EGeN38n;4h=9wF=|87SI@rwqF&$JG!c#vufkDh`
+zU|`}<XkcOya9{*67(nSb_G|rgMrJl44~0e+sR<5DydZ{<#{mZ>HX&H*gJ)I!&-%s(
+b?3ws=cGzt3y?lv*fq}u()z4*}Q$iB}f&g**
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/shadow/corner-source-active.expected.png b/tests/shadow/corner-source-active.expected.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..2de82c4c1f1b18fe9c89e8dbcde6606cff2af300
+GIT binary patch
+literal 5530
+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
+T?N_-B3=9mOu6{1-oD!M<f){Eb
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/shadow/corner-source-inactive.expected.png b/tests/shadow/corner-source-inactive.expected.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..ce10b12d142f356d3b5de0e8a2a08082ac3f8c2e
+GIT binary patch
+literal 3450
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/shadow/side-left-flipped-rotated.expected.png b/tests/shadow/side-left-flipped-rotated.expected.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..c6e5bd3061ed06ade30f33d7fa4aac068fdd3320
+GIT binary patch
+literal 580
+zcmeAS@N?(olHy`uVBq!ia0y~yV6b6eU`XL$V_;yor5OBzfq{wJ)5S5Qg7NJE<^?K|
+z(~f=oU;eK5#F^zq-pT87Z*PO5%$|AEyw=Y%GFE!`vut}-)v|W$?5qBN{x>mv{LjvG
+z<i9+J!2fy$hd=)tu?sZ)w-*rj^S`m-!GC@hmjCq%3qJg3XX1h}v_Onc|Jj+qjK}}^
+zSxP{P=l!=AFaYt+{P@qzSp4t5!vT;%8xH=L=eY6YKR-*(=l|?XWgyApKmRi`s)Ja|
+zLBw^C@#{cZ@0|EA&#`0Xe|v!s0w4npgB12Z`_Ip^2jq?isXzZS-!%JQuW<X>fBux)
+zfBrY-%>HjbA@}ot_D#9}{yS_t`(OUVwh^J|Lw{z$)11uf(n$;q3=E#GelF{r5}E*E
+Cp+ANI
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/shadow/side-left-flipped.expected.png b/tests/shadow/side-left-flipped.expected.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..02e3128a04e7131d37f659fd103180d6e220ad14
+GIT binary patch
+literal 4417
+zcmeAS@N?(olHy`uVBq!ia0y~yV6b6eU`XL$V_;yor5OBzfkBYN)5S5Qg7NJE<^?K|
+z(~f=oU;eK5#F^zq-pT87Z*PO5%$|AEyw=Y%GFE!`vut}-)v|W$?5qAUivLm{S$3ui
+zpI2Kaps-Fr!J(mnfrUjup@E4dpn*Xvpn<EzA^o@hkMEA7N=HLrGz3ONU^E0qLtr!n
+zMnhmU1V%$(Gz3ONU^E0qLtr!nMnhnrL*Su2<9@ZiC(5bor!p`wFnGH9xvX<aXaWGF
+CMhmV0
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/shadow/side-left-rotated.expected.png b/tests/shadow/side-left-rotated.expected.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..47972a977a526aa6a91a8bd14174ff1ba919f1fd
+GIT binary patch
+literal 580
+zcmeAS@N?(olHy`uVBq!ia0y~yV6b6eU`XL$V_;yor5OBzfq{wJ)5S5Qg7NJE<^?K|
+z(~f=oU;eK5#F^zq-pT87Z*PO5%$|AEyw=Y%GFE!`vut}-)v|W$?5q9<PJjB(&J@@5
+z-(KKD#=rj#2M+)I&&<gG@IODxoiqRCId)9^Z!b_F`@de{ffPtu6GU)=h(Zv-_rG2t
+zVfKG}fek1B%X8d#@SmSW=f{6$#$u3U&wqOXgUA2*S-$-F-`LRi-(KLt$N%h1TL0@6
+z7JzI8Gd}!hXW{~hfEXZW2!IrW3}X3Tui)_Ke<K4((~<x390Irme*9;>Y4*Qf;r6rt
+z{3*Bp{BO*e{oj5<?&tsPn{xmCci49Jzx;`9KmRiie?=eqH=KN$v!Gh#0|NsCgQu&X
+J%Q~loCIBtNLa+b;
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/shadow/side-left.expected.png b/tests/shadow/side-left.expected.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..6f3317943b78c33a2b4b39e9ad297abcb31b5b0d
+GIT binary patch
+literal 4479
+zcmeAS@N?(olHy`uVBq!ia0y~yV6b6eU`XL$V_;yor5OBzfkDvC)5S5Qg7NJE<^?K|
+z(~f=oU;eK5#F^zq-pT87Z*PO5%$|AEyw=Y%GFE!`vut}-)v|W$?5q9<PBSSRFbQ91
+z;PhC)$Z4X$$jm9>aiD>b`571UGp^4$&u*S6Hu`UL+w8v`M@3`;i(3MdlmSR#Bb!PB
+zShYdIftbVtF^Tie+RU!>dlsK|``LYVMt$y{0~|gM%xVgaY$_KTSa`sy*?4AX^UTmb
+zvw3E^@%fW~PUqbI^IPFTYNMb;BWK0|7LY=z2@Q=P)dw0Fi(46sTPw{z=RC8VSwAy(
+zcD+2y9vuTFWdlau84WB_6C9X@48W=-3=-CX(D}4^XKmC!>u=8e{JyziI;&d(i`oK4
+zVUWTM2PQU<YDQ+ZGoox~M4#O}vw7z8lz*w)a{tu|eAsk=qvrsNNdl8lh659?#{sbF
+zgaZvb4>jyOWHY<c?DL#6`_F7UyPuyaPE4Xva7F{04@ltxMo@4$FtPDS7=%k0gwIGf
+zKA$#k^3UlvxBdL?I2yR4fjgRVM~j8gVqvt*O&G1vKy8cB)&i()G1^)%n9wlV6dP^l
+zj&>rLctIU632>KVv{)D|7Qh`^mC@D$-NzRG3I65?u4+;5Kg__uz~JfX=d#Wzp$Pzs
+C#g~x)
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/shadow/side-single-row-active.expected.png b/tests/shadow/side-single-row-active.expected.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..a649f0edc16109520d4148c964ea8be199ee7d80
+GIT binary patch
+literal 157
+zcmeAS@N?(olHy`uVBq!ia0y~yV9;h@U|{56V_;x#&kCQwz`&5=>Eakt!T9z7^8%H~
+zX~#bPFMrp2;>_|Q@8os4x3@u2X3xB7UhC%>87sZ}S++f^YFWE=_ErA_r<s%un1nAh
+zaC$6Y<TO!WWagCcIMBez{EUnF8Q15WXE)Cj8|lk5{1?17N0Ld1<Bu5w0|SGntDnm{
+Hr-UW|T(3C2
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/shadow/side-single-row-inactive.expected.png b/tests/shadow/side-single-row-inactive.expected.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..083991f9fad05c4332da2246c4b164457492e7ed
+GIT binary patch
+literal 146
+zcmeAS@N?(olHy`uVBq!ia0y~yV9;h@U|{56V_;x#&kCQwz`zjc>Eakt!T9z7^8%H~
+zX~#bPFMrp2;>_|Q@8os4x3@u2X3xB7UhC%>87sZ}S++f^YFWE=_ErA_iyKT07?dwG
+waC#^-vhb*cOBjUDNH_jp_N<lpfjr}qV1B0aJ*kTs7#J8lUHx3vIVCg!02?qho&W#<
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/subsurface-layout/layout-no-border.expected.png b/tests/subsurface-layout/layout-no-border.expected.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..afd126a11ca5a28a7eebff28786fc892f2742da9
+GIT binary patch
+literal 7160
+zcmeAS@N?(olHy`uVBq!ia0y~yV4MKL9Bd2>3=R9u&M+`Y@Aq_Z45?szdw_X?O60U-
+zAODxX>pgL1d69SWy4>5_peVCv-ZZcE^Nfs@-u*1wo>jH1-8%cK|F*NC;jyJxL&N{R
+zR=E9a)#`P-UaeaFuXI9g@l}Y#f2$MQcD{m0)XS#ajsYo-Exo#*Z&NN<@w#2F;@NMS
+zK}?DLy1qGQHpG;5zpgtD732RO_XK<F@AOSS_w(H}8|9CN2PmNr+VpVU^UwN3Q2rBl
+z`SU*UbG^)_+<)sQ|A;>fO2+yfKkgrX_TM7q_Mdq5kNev|`8Q7B<No%u{|irS`?=rm
+zQ9UmxfA3XzRL?*A|Kka{pX=uy`7Z^^|5c7h{>z#DKdyND*?+6f|E6a`!(+cTb^N!@
+z`Pc8f?d<<jq5s)4KpC7>@PGA<Kl1H4v;V(V`FGs_Q~+=*{rkS*r#&bGjXH2N1PP=;
+z?!v2~;d>RH)e9ohpxC2TtJhUIp82nYNQ1gZz-e&Ce^*2rjP3xZLBs#uh%~re0GtMs
+z{)umdr@?$ha3(qOM?VRkN$xvAGRe>QBZy4Wy5rTV)o}u!_je#N$*2Rbd;S>>K~On3
+zng&5N$!I2dt@3ZQm;p5wMhoiolYflXB%t=-Xk83yQI9qjMjH#zCjV$-VYIOT?H7+W
+z7DgKj(6O1}(O9te1NG2%z1lzJ?Elge+kTGnN5ca&6f;QE18C?IGy*hyr!GKaUZC-@
+ip*is~>U!CKf}X2a+%S<`D8#_Pz~JfX=d#Wzp$P!+ZrSYs
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/subsurface-layout/layout-no-titlebar-and-border.expected.png b/tests/subsurface-layout/layout-no-titlebar-and-border.expected.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..c8ececc2cb63a883034a6520843ca9d4085a0e5e
+GIT binary patch
+literal 6871
+zcmeAS@N?(olHy`uVBq!ia0y~yV4MKL9Bd2>3=R9u&M+`Y&GU3|45?szdw_X?O60U-
+zAODxX>pgL1d69SWy4>5_peVCv-ZZcE^Nfs@-u*1wo>jH1-8%cK|F*NC;jyJxL&N{R
+zR=E9a)#`P-UaeaFuXI9g@l}Y#f2$MQcD{m0)XS#ajsYo-Exo#*Z&NN<@w#2F;@NMS
+zK}?DLy1qGQHpG;5zpguu8b2C1pj1L>%K2~62~Jf1gUtS4SG@gfls_6Cpma58(}Pv#
+zf88UY;jv$vX8d=}`Pc8f?d<<jq5shxpk&Ny_`mzcANls2+5caw{M#-7Dm%H8{)un=
+zY0r1l?EiJoKlzFv--#djqo4G-US?D7zx9)U+;;+%z4{$L<BvT1Z;^8QPrUla{jED*
+zty&!?@Ogj7+5d$nw*B1i_o$w`@M>uIUWI4%g0ufWo{;;we(sU~Vvkm>URULK=D(8J
+z|Kp$xH0r?75FAZ|qnTvat5u`L%xFP9T9b^{#iNad(dO1@gLSk;J=!N3?KF+pZs+Jg
+z6KI5D)u0_%8I2#5_<;<}kB-=bW++DI8$d~8uuaDNa2NY+f8zwJK4=Py!PC{xWt~$(
+F69BBlLZScw
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/subsurface-layout/layout-no-titlebar.expected.png b/tests/subsurface-layout/layout-no-titlebar.expected.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..1a6505e34392bb0234686a5d6272d3045e44a8f3
+GIT binary patch
+literal 6880
+zcmeAS@N?(olHy`uVBq!ia0y~yV4MKL9Bd2>3=R9u&M+`YE%$VB45?szdw_X?O60U-
+zAODxX>pgL1d69SWy4>5_peVCv-ZZcE^Nfs@-u*1wo>jH1-8%cK|F*NC;jyJxL&N{R
+zR=E9a)#`P-UaeaFuXI9g@l}Y#f2$MQcD{m0)XS#ajsYo-Exo#*Z&NN<@w#2F;@NMS
+zK}?DLy1qGQHpG;5zpguu8b2C1pj1Lm%K4ut1Wr`{b#wmdJ8wHX${!66P*F8x(nG4y
+z|Jfa&vXIsA|LGfl<lAy)|39tr&s-3cthtl^P2c#_p6907|LLB8@|8fjMEuAf{p8Q}
+z5}R`W=}-P~-vw0G>UaE%KlbduLCWnv@oFFUckXz#YIU5z=lwlr|0kZ<_H)0_qk7@O
+ztD)h06`s{g&i;RRLhk4KnMeMsJzBMTU6tdR|3+s2+ZAs=`)}0w-}gvpc<k4v8UIsr
+z{_%q{)TjeTLvS<=j%Je5tD&RC%xFP9T9b^{#iNad(dO2!SECKq(H8Y+pJcStG(x+b
+zqXSQ%5sJ_uGte>`Unubf8Mq%E(Fe_7jLt`ZlEz?|ta&KU*v;sC<IMg}3kC)T22WQ%
+Jmvv4FO#so^V*LOB
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/subsurface-layout/layout.expected.png b/tests/subsurface-layout/layout.expected.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..521b0d78b29438d0c0161b423519205994b596f2
+GIT binary patch
+literal 7173
+zcmeAS@N?(olHy`uVBq!ia0y~yV4MKL9Bd2>3=R9u&M+`YpYe2Y45?szdw_X?O60U-
+zAODxX>pgL1d69SWy4>5_peVCv-ZZcE^Nfs@-u*1wo>jH1-8%cK|F*NC;jyJxL&N{R
+zR=E9a)#`P-UaeaFuXI9g@l}Y#f2$MQcD{m0)XS#ajsYo-Exo#*Z&NN<@w#2F;@NMS
+zK}?DLy1qGQHpG;5zpgtDX5;_yPu>CY*suJ=&-Id<a!2{2;W4DrgZ|_n@rObA@xRc=
+z{q1M}C!W~$bHC4{dR|c8{p)??znt0scE#Jz{u_1vH$4*?9{W{a@PGA<Kk{ukv;Ut~
+z`FGs_lxg?7{CS`Fxn5#Z?!Qq3N5gOcl8w0_C>?Sq{hPk=r#;V2v;WgQ|KuxyDi`r1
+zfAo{#Y4g4dD6#8z{ER>L?7u<E?LYBqANO~H%J4XW&-;5289=!3YH0Xgg=h7Wv;QBS
+zko&oQ=8^wuk5;W-SLJx-zY!u+_#Odeil!O=Q*-|DJ8wJtKUL`e><&=v#cKHfG$Nyn
+zI&d@uq2=Rf8XV0euzGg1m>Dgoq0Ot&nq;&thPJ9l8w;b2h0(^sXp4HZPcqu88_wO%
+z!z!R2`s#ntH~z$fs=iVFXn26;4u(j20FCmjT0Pk3D8NZ-$j-2gx}Ma@v%~gGLd9!t
+VZ2i+%%D}+D;OXk;vd$@?2>|9UvJ(IR
+
+literal 0
+HcmV?d00001
+
