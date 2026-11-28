@@ -1,0 +1,131 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -82,7 +82,7 @@
+ download-binaries = [
+     "dep:ureq",
+     "dep:lzma-rust2",
+-    "dep:hmac-sha256",
++    "dep:sha2",
+ ]
+ lax-feature-matching = []
+ migraphx = []
+@@ -108,6 +108,10 @@
+     "tls-rustls-no-provider",
+     "ureq?/rustls",
+ ]
++tls-rustls-platform = [
++    "tls-rustls",
++    "ureq?/platform-verifier",
++]
+ tls-rustls-no-provider = [
+     "__tls",
+     "ureq?/rustls-no-provider",
+@@ -127,8 +131,8 @@
+ version = "0.3"
+ optional = true
+
+-[build-dependencies.hmac-sha256]
+-version = "1.1"
++[build-dependencies.sha2]
++version = "0.11"
+ optional = true
+
+ [build-dependencies.lzma-rust2]
+--- a/build/download/mod.rs
++++ b/build/download/mod.rs
+@@ -9,8 +9,7 @@
+ use ureq::{
+ 	Agent, BodyReader, Proxy,
+ 	config::Config as UreqConfig,
+-	http::StatusCode,
+-	tls::{RootCerts, TlsConfig, TlsProvider}
++	http::StatusCode
+ };
+
+ use crate::{error::Error, log, vars};
+@@ -18,6 +17,7 @@
+ mod extract;
+ mod resolve;
+ mod verify;
++mod tls;
+ pub use self::{
+ 	extract::extract_tgz,
+ 	resolve::resolve_dist,
+@@ -25,25 +25,16 @@
+ };
+
+ pub fn fetch_file(source_url: &str) -> Result<BodyReader<'static>, Error> {
+-	let tls_provider = if cfg!(feature = "tls-rustls-no-provider") {
+-		TlsProvider::Rustls
+-	} else {
+-		TlsProvider::NativeTls
+-	};
+-	let root_certs = if cfg!(feature = "tls-rustls-no-provider") {
+-		RootCerts::WebPki
+-	} else {
+-		RootCerts::PlatformVerifier
+-	};
++	let tls_config = tls::download_tls_config();
+
+-	log::debug!("downloading from '{source_url}'; tls_provider={tls_provider:?}, root_certs={root_certs:?}");
++	log::debug!("downloading from '{source_url}'; tls_config={tls_config:?}");
+
+ 	let resp = Agent::new_with_config(
+ 		UreqConfig::builder()
+ 			.proxy(Proxy::try_from_env())
+ 			.max_redirects(1)
+ 			.https_only(true)
+-			.tls_config(TlsConfig::builder().provider(tls_provider).root_certs(root_certs).build())
++			.tls_config(tls_config)
+ 			.user_agent(format!(
+ 				"{}/{} (host {}; for {})",
+ 				env!("CARGO_PKG_NAME"),
+--- /dev/null
++++ b/build/download/tls.rs
+@@ -0,0 +1,13 @@
++use ureq::tls::{RootCerts, TlsConfig, TlsProvider};
++
++// Keep trust-store policy independent of the selected TLS implementation.
++pub(crate) fn download_tls_config() -> TlsConfig {
++    let rustls = cfg!(feature = "tls-rustls-no-provider");
++    let provider = if rustls { TlsProvider::Rustls } else { TlsProvider::NativeTls };
++    let roots = if rustls && !cfg!(feature = "tls-rustls-platform") {
++        RootCerts::WebPki
++    } else {
++        RootCerts::PlatformVerifier
++    };
++    TlsConfig::builder().provider(provider).root_certs(roots).build()
++}
+--- a/build/download/verify.rs
++++ b/build/download/verify.rs
+@@ -1,6 +1,6 @@
+ use std::io::{self, Read};
+
+-use hmac_sha256::Hash;
++use sha2::{Digest, Sha256};
+
+ pub fn hex_str_to_bytes(c: impl AsRef<[u8]>) -> Vec<u8> {
+ 	fn nibble(c: u8) -> u8 {
+@@ -27,12 +27,12 @@
+
+ pub struct VerifyReader<R> {
+ 	reader: R,
+-	state: Hash
++	state: Sha256
+ }
+
+ impl<R: Read> VerifyReader<R> {
+ 	pub fn new(reader: R) -> Self {
+-		Self { reader, state: Hash::new() }
++		Self { reader, state: Sha256::new() }
+ 	}
+
+ 	pub fn finalize(mut self) -> io::Result<([u8; 32], R)> {
+@@ -40,6 +40,6 @@
+ 		// stream is consumed so we get the correct hash.
+ 		io::copy(&mut self, &mut io::sink())?;
+
+-		Ok((self.state.finalize(), self.reader))
++		Ok((self.state.finalize().into(), self.reader))
+ 	}
+ }

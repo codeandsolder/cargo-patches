@@ -1,0 +1,34 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -212,6 +212,11 @@
+     "ureq?/rustls",
+     "tls-rustls-no-provider",
+ ]
++tls-rustls-platform = [
++    "tls-rustls",
++    "ort-sys/tls-rustls-platform",
++    "ureq?/platform-verifier",
++]
+ tls-rustls-no-provider = [
+     "ort-sys/tls-rustls-no-provider",
+     "ureq?/rustls-no-provider",
+@@ -290,7 +295,7 @@
+ optional = true
+
+ [target.'cfg(not(target_arch = "wasm32"))'.dependencies.sha2]
+-version = "0.10"
++version = "0.11"
+ optional = true
+
+ [target.'cfg(not(target_arch = "wasm32"))'.dependencies.ureq]
+--- a/src/session/builder/impl_commit.rs
++++ b/src/session/builder/impl_commit.rs
+@@ -312,7 +312,7 @@
+ 		let agent = Config::builder()
+ 			.tls_config(
+ 				TlsConfig::builder()
+-					.root_certs(if cfg!(any(feature = "tls-rustls", feature = "tls-rustls-no-provider")) {
++					.root_certs(if cfg!(any(feature = "tls-rustls", feature = "tls-rustls-no-provider")) && !cfg!(feature = "tls-rustls-platform") {
+ 						RootCerts::WebPki
+ 					} else {
+ 						RootCerts::PlatformVerifier
