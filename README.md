@@ -79,3 +79,20 @@ same family revision. Its regression gate exercises ordinary GPU glyph reuse,
 subpixel placement, retained-scene isolation, and leased glyph residency on a
 working WGPU adapter (Mesa Vulkan is sufficient). The atlas is populated on
 first use; fixed-cell consumers can pin just their required glyph subset.
+
+## Linux IPMI and clock dependency ownership
+
+The `ipmi-transports` family implements its local Linux file transport using
+Rustix poll and typed ioctls instead of Nix. The raw UAPI message layouts use
+C `long` for sequence IDs, a full generic address buffer and bounded owned
+response slices. Its validation compares sizes, field offsets and ioctl
+opcodes with the native Linux headers and exercises real poll/error behavior
+without requiring a BMC. Remote RMCP and timestamp feature selection remains
+independent.
+
+The `rtime-clock` family makes the clock-control backends optional through
+`clock-backends` (enabled by default). Consumers needing only `adjtime` and
+`adjtimex` can disable default features, retaining the upstream audited libc
+FFI without pulling in the Nix-based clock and PTP backends or rtime-core.
+Both minimal and full feature configurations exercise read-only clock access
+and the minimal configuration is checked for its exact dependency boundary.

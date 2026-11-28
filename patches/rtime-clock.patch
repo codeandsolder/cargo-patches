@@ -1,0 +1,86 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 1db7f22..79e7b07 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -39,6 +39,10 @@ license = "MIT"
+ repository = "https://github.com/ZerosAndOnesLLC/rTime"
+ resolver = "2"
+
++[features]
++default = ["clock-backends"]
++clock-backends = ["dep:nix", "dep:rtime-core"]
++
+ [lib]
+ name = "rtime_clock"
+ path = "src/lib.rs"
+@@ -48,6 +52,7 @@ version = "0.2"
+
+ [dependencies.nix]
+ version = "0.31"
++optional = true
+ features = [
+     "time",
+     "net",
+@@ -58,6 +63,4 @@ features = [
+
+ [dependencies.rtime-core]
+ version = "0.16.0"
+-
+-[dependencies.thiserror]
+-version = "2"
++optional = true
+diff --git a/src/adjtime.rs b/src/adjtime.rs
+index c814a63..834739d 100644
+--- a/src/adjtime.rs
++++ b/src/adjtime.rs
+@@ -81,3 +81,18 @@ pub fn ntp_adjtime(tx: &mut Timex) -> io::Result<libc::c_int> {
+     }
+     Ok(ret)
+ }
++
++#[cfg(all(test, target_os = "linux"))]
++mod tests {
++    use super::{Timex, adjtimex};
++
++    #[test]
++    fn zero_mode_is_a_read_only_kernel_query() {
++        let mut tx = Timex::new();
++        assert_eq!(tx.0.modes, 0);
++        // A read-only query needs no CAP_SYS_TIME on a normal Linux kernel.
++        let state = adjtimex(&mut tx).expect("query kernel clock discipline");
++        assert!(state >= 0);
++        assert_eq!(tx.0.modes, 0);
++    }
++}
+diff --git a/src/lib.rs b/src/lib.rs
+index 5a976fd..2f0c696 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -3,19 +3,23 @@
+ //!
+ //! Abstracts the platform primitives used to read and steer the system clock — slewing
+ //! (`adjtime`/`adjtimex`), stepping (`clock_settime`), and reading PTP hardware clocks —
+-//! behind a common interface, with a [`mock`] backend for tests.
++//! behind a common interface, with a mock backend for tests.
++//! Disable default features to use only the audited `adjtime` FFI wrappers.
+ //!
+ //! # Modules
+ //!
+-//! - [`unix`] — the Unix system-clock backend.
++//! - `unix` — the Unix system-clock backend.
+ //! - [`adjtime`] — `adjtime`/`adjtimex` slew and frequency adjustment.
+-//! - [`phc`] — PTP hardware clock (PHC) access.
+-//! - [`mock`] — an in-memory clock for testing.
++//! - `phc` — PTP hardware clock (PHC) access.
++//! - `mock` — an in-memory clock for testing.
+
+ #![deny(unsafe_code)]
+
+ #[allow(unsafe_code)] // audited FFI; see module docs
+ pub mod adjtime;
++#[cfg(feature = "clock-backends")]
+ pub mod mock;
++#[cfg(feature = "clock-backends")]
+ pub mod phc;
++#[cfg(feature = "clock-backends")]
+ pub mod unix;
