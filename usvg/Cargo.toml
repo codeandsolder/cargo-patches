@@ -11,9 +11,9 @@
 
 [package]
 edition = "2024"
-rust-version = "1.87.0"
+rust-version = "1.85.0"
 name = "usvg"
-version = "0.47.0"
+version = "0.50.0"
 build = false
 exclude = ["tests"]
 autolib = false
@@ -32,22 +32,30 @@ resolver = "2"
 
 [features]
 default = [
+    "svgz",
     "text",
     "system-fonts",
     "memmap-fonts",
+    "writer",
 ]
 memmap-fonts = ["fontdb/memmap"]
+svgz = ["flate2"]
 system-fonts = [
     "fontdb/fs",
     "fontdb/fontconfig",
 ]
 text = [
     "fontdb",
-    "rustybuzz",
-    "ttf-parser",
+    "harfrust",
+    "skrifa",
     "unicode-bidi",
     "unicode-script",
     "unicode-vo",
+    "writer",
+]
+writer = [
+    "xmlwriter",
+    "base64",
 ]
 
 [lib]
@@ -58,13 +66,16 @@ path = "src/lib.rs"
 name = "usvg"
 path = "src/main.rs"
 required-features = [
+    "svgz",
     "text",
     "system-fonts",
     "memmap-fonts",
+    "writer",
 ]
 
 [dependencies.base64]
-version = "0.22"
+version = "0.23"
+optional = true
 
 [dependencies.data-url]
 version = "0.3"
@@ -72,15 +83,20 @@ version = "0.3"
 [dependencies.flate2]
 version = "1.1"
 features = ["zlib-rs"]
-default-features = false
-
-[dependencies.fontdb]
-version = "0.23.0"
 optional = true
 default-features = false
 
+[dependencies.fontdb]
+version = "0.24"
+optional = true
+default-features = false
+
+[dependencies.harfrust]
+version = "0.15.0"
+optional = true
+
 [dependencies.imagesize]
-version = "0.14.0"
+version = "0.15.0"
 
 [dependencies.kurbo]
 version = "0.13.0"
@@ -95,29 +111,26 @@ features = ["eq-separator"]
 [dependencies.roxmltree]
 version = "0.21.1"
 
-[dependencies.rustybuzz]
-version = "0.20.1"
-optional = true
-
 [dependencies.simplecss]
 version = "0.2"
 
 [dependencies.siphasher]
 version = "1.0"
 
+[dependencies.skrifa]
+version = "0.49.0"
+features = ["std"]
+optional = true
+default-features = false
+
 [dependencies.strict-num]
 version = "0.1.1"
 
 [dependencies.svgtypes]
-version = "0.16.1"
+version = "0.16.2"
 
 [dependencies.tiny-skia-path]
 version = "0.12.0"
-
-[dependencies.ttf-parser]
-version = "0.25.1"
-features = ["gvar-alloc"]
-optional = true
 
 [dependencies.unicode-bidi]
 version = "0.3"
@@ -133,6 +146,7 @@ optional = true
 
 [dependencies.xmlwriter]
 version = "0.1"
+optional = true
 
 [dev-dependencies.once_cell]
 version = "1.21"

@@ -6,14 +6,24 @@ use std::sync::Arc;
 use fontdb::{Database, ID};
 use svgtypes::FontFamily;
 
-use self::layout::DatabaseExt;
 use crate::{Cache, Font, FontStretch, FontStyle, Text};
 
+pub(crate) mod cache;
 pub(crate) mod flatten;
 
 mod colr;
 /// Provides access to the layout of a text node.
 pub mod layout;
+
+/// The ID of a glyph within a font
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct GlyphId(pub u32);
+
+impl From<GlyphId> for skrifa::raw::types::GlyphId {
+    fn from(value: GlyphId) -> Self {
+        Self::new(value.0)
+    }
+}
 
 /// A shorthand for [FontResolver]'s font selection function.
 ///
@@ -147,6 +157,7 @@ impl FontResolver<'_> {
     pub fn default_fallback_selector() -> FallbackSelectionFn<'static> {
         Box::new(|c, exclude_fonts, fontdb| {
             let base_font_id = exclude_fonts[0];
+            let base_face = fontdb.face(base_font_id)?;
 
             // Iterate over fonts and check if any of them support the specified char.
             for face in fontdb.faces() {
@@ -156,7 +167,6 @@ impl FontResolver<'_> {
                 }
 
                 // Check that the new face has the same style.
-                let base_face = fontdb.face(base_font_id)?;
                 if base_face.style != face.style
                     && base_face.weight != face.weight
                     && base_face.stretch != face.stretch
@@ -164,7 +174,7 @@ impl FontResolver<'_> {
                     continue;
                 }
 
-                if !fontdb.has_char(face.id, c) {
+                if !has_char(fontdb, face.id, c) {
                     continue;
                 }
 
@@ -178,7 +188,7 @@ impl FontResolver<'_> {
                     .families
                     .iter()
                     .find(|f| f.1 == fontdb::Language::English_UnitedStates)
-                    .unwrap_or(&base_face.families[0]);
+                    .unwrap_or(&face.families[0]);
 
                 log::warn!("Fallback from {} to {}.", base_family.0, new_family.0);
                 return Some(face.id);
@@ -202,15 +212,30 @@ impl std::fmt::Debug for FontResolver<'_> {
 ///    as decoration spans).
 /// 2. We convert all of the positioned glyphs into outlines.
 pub(crate) fn convert(text: &mut Text, resolver: &FontResolver, cache: &mut Cache) -> Option<()> {
-    let (text_fragments, bbox) = layout::layout_text(text, resolver, &mut cache.fontdb)?;
+    let (text_fragments, bbox) = layout::layout_text(text, resolver, &mut cache.fonts)?;
     text.layouted = text_fragments;
     text.bounding_box = bbox.to_rect();
     text.abs_bounding_box = bbox.transform(text.abs_transform)?.to_rect();
 
-    let (group, stroke_bbox) = flatten::flatten(text, cache)?;
+    let (group, stroke_bbox) = flatten::flatten(text, &mut cache.fonts)?;
     text.flattened = Box::new(group);
     text.stroke_bounding_box = stroke_bbox.to_rect();
     text.abs_stroke_bounding_box = stroke_bbox.transform(text.abs_transform)?.to_rect();
 
     Some(())
+}
+
+#[inline(never)]
+fn has_char(fontdb: &Database, id: ID, c: char) -> bool {
+    // Unlike for the main fonts where we use skrifa's owned font abstraction,
+    // here we just call `with_face_data` repeatedly so we don't need to call `to_vec`
+    // for all fallback fonts.
+    // TODO: Cache the charmaps of fallback candidates, building one for every lookup is expensive.
+    fontdb
+        .with_face_data(id, |data, face_index| {
+            let font = skrifa::FontRef::from_index(data, face_index).ok()?;
+            skrifa::charmap::Charmap::new(&font).map(c)
+        })
+        .flatten()
+        .is_some()
 }
