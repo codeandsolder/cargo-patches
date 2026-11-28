@@ -1,0 +1,6 @@
+[workspace]
+resolver = "3"
+members = ["ipmi-rs", "ipmi-rs-core"]
+
+[patch.crates-io]
+ipmi-rs-core = { path = "ipmi-rs-core" }
