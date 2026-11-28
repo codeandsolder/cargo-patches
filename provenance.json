@@ -1,0 +1,11 @@
+{
+  "family": "prometheus-text",
+  "packages": [
+    {
+      "name": "prometheus",
+      "version": "0.14.0",
+      "checksum": "3ca5326d8d0b950a9acd87e6a3f94745394f62e4dae1b1ee22b2bc0c394af43a",
+      "patch": "patches/prometheus.patch"
+    }
+  ]
+}
