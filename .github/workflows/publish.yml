@@ -19,12 +19,12 @@ jobs:
           toolchain: nightly-2026-11-26
       - name: Install native validation tools
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends binutils ripgrep jq clang cmake
-      - uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@626aa7204e14bb78961955fc12d5f79fbf4ece69 # main
+      - uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@9c14ef2d72423958c56944febc620ec50f01d65a # main
         with:
           rust-toolchain: nightly-2026-11-26
       - run: node scripts/publish.mjs --check
       - if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@626aa7204e14bb78961955fc12d5f79fbf4ece69 # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@9c14ef2d72423958c56944febc620ec50f01d65a # main
   publish:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: check
