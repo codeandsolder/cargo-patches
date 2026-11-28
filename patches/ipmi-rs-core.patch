@@ -1,0 +1,25 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 1ebc14c..1db6dfa 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -43,7 +43,7 @@ name = "ipmi_rs_core"
+ path = "src/lib.rs"
+ 
+ [dependencies.bitflags]
+-version = "1.3.0"
++version = "2"
+ 
+ [dependencies.log]
+ version = "0.4.25"
+diff --git a/src/storage/sdr/record/mod.rs b/src/storage/sdr/record/mod.rs
+index 1106043..34aead0 100644
+--- a/src/storage/sdr/record/mod.rs
++++ b/src/storage/sdr/record/mod.rs
+@@ -202,6 +202,7 @@ pub enum HysteresisCapability {
+ }
+ 
+ bitflags::bitflags! {
++    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+     pub struct ThresholdAssertEventMask: u16 {
+         const UPPER_NON_RECOVERABLE_GOING_HIGH = 1 << 11;
+         const UPPER_NON_RECOVERABLE_GOING_LOW = 1 << 10;

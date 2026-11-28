@@ -1,0 +1,129 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 14fd015..618a788 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -36,11 +36,11 @@ license = "MIT OR Apache-2.0"
+ repository = "https://github.com/datdenkikniet/ipmi-rs"
+ 
+ [features]
+-default = [
+-    "unix-file",
+-    "md5",
+-]
+-unix-file = ["nix"]
++default = ["unix-file", "rmcp", "md5", "timestamp-format"]
++unix-file = ["dep:nix"]
++rmcp = ["dep:aes", "dep:cbc", "dep:getrandom", "dep:hmac", "dep:rand", "dep:sha1"]
++md5 = ["rmcp", "dep:md5"]
++timestamp-format = ["ipmi-rs-core/time"]
+ 
+ [lib]
+ name = "ipmi_rs"
+@@ -49,55 +49,59 @@ path = "src/lib.rs"
+ [[example]]
+ name = "common"
+ path = "examples/common.rs"
+-required-features = ["unix-file"]
++required-features = ["unix-file", "rmcp"]
+ 
+ [[example]]
+ name = "get-info"
+ path = "examples/get-info.rs"
+-required-features = ["unix-file"]
++required-features = ["unix-file", "rmcp"]
+ 
+ [[example]]
+ name = "ipmi-channels"
+ path = "examples/ipmi-channels.rs"
+-required-features = ["unix-file"]
++required-features = ["unix-file", "rmcp"]
+ 
+ [[example]]
+ name = "ipmi-lan-config"
+ path = "examples/ipmi-lan-config/main.rs"
+-required-features = ["unix-file"]
++required-features = ["unix-file", "rmcp"]
+ 
+ [[example]]
+ name = "raw"
+ path = "examples/raw.rs"
+-required-features = ["unix-file"]
++required-features = ["unix-file", "rmcp"]
+ 
+ [[example]]
+ name = "sel"
+ path = "examples/sel.rs"
+-required-features = ["unix-file"]
++required-features = ["unix-file", "rmcp"]
+ 
+ [[example]]
+ name = "sensors-of-type"
+ path = "examples/sensors-of-type.rs"
+-required-features = ["unix-file"]
++required-features = ["unix-file", "rmcp"]
+ 
+ [dependencies.aes]
+ version = "0.8.4"
+-
+-[dependencies.bitflags]
+-version = "1.3"
++optional = true
+ 
+ [dependencies.cbc]
+ version = "0.1.2"
++optional = true
+ 
+ [dependencies.getrandom]
+ version = "0.4.2"
++optional = true
+ 
+ [dependencies.hmac]
+ version = "0.12.1"
++optional = true
+ 
+ [dependencies.ipmi-rs-core]
+ version = "0.6.0"
++path = "../ipmi-rs-core"
++default-features = false
++features = ["log"]
+ 
+ [dependencies.log]
+ version = "0.4"
+@@ -107,7 +111,7 @@ version = "0.8"
+ optional = true
+ 
+ [dependencies.nix]
+-version = "0.30"
++version = "0.31"
+ features = [
+     "ioctl",
+     "poll",
+@@ -115,14 +119,13 @@ features = [
+ optional = true
+ default-features = false
+ 
+-[dependencies.nonmax]
+-version = "0.5"
+-
+ [dependencies.rand]
+ version = "0.8.5"
++optional = true
+ 
+ [dependencies.sha1]
+ version = "0.10.6"
++optional = true
+ 
+ [dev-dependencies.clap]
+ version = "4.3"
+diff --git a/src/lib.rs b/src/lib.rs
+index 68040ae..c3f453e 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -11,6 +11,7 @@ mod file;
+ #[cfg(feature = "unix-file")]
+ pub use file::File;
+ 
++#[cfg(feature = "rmcp")]
+ pub mod rmcp;
+ 
+ mod error;

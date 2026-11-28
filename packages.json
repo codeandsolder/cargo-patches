@@ -263,5 +263,27 @@
       "checksum": "ae67d5c03ee972c101a1d8db3ddbf8a9c819ad1ea9d6fd9cd385605547b60edb",
       "patch": "patches/atomic-write-file.patch"
     }
+  ],
+  "prometheus-text": [
+    {
+      "name": "prometheus",
+      "version": "0.14.0",
+      "checksum": "3ca5326d8d0b950a9acd87e6a3f94745394f62e4dae1b1ee22b2bc0c394af43a",
+      "patch": "patches/prometheus.patch"
+    }
+  ],
+  "ipmi-transports": [
+    {
+      "name": "ipmi-rs-core",
+      "version": "0.6.0",
+      "checksum": "a2dd1b1e749c89affd95b9667995e19a8f16c6a72c668a484d47ce964770bc2d",
+      "patch": "patches/ipmi-rs-core.patch"
+    },
+    {
+      "name": "ipmi-rs",
+      "version": "0.6.0",
+      "checksum": "ff183b5b6e52153a6750a378a920f808b108ddf830c6411491c2b2e76ef6847e",
+      "patch": "patches/ipmi-rs.patch"
+    }
   ]
 }
