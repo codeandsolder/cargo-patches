@@ -1,0 +1,89 @@
+--- a/src/se/content.rs
++++ b/src/se/content.rs
+@@ -308,6 +308,7 @@
+     #[inline]
+     fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
+         Ok(Seq {
++            allow_primitive: self.allow_primitive,
+             ser: self,
+             // If sequence if empty, nothing will be serialized. Because sequence can be of `Option`s
+             // we need to assume that writing indent may change the data and do not write anything
+@@ -415,6 +416,8 @@
+ /// and reports it when the sequence ends
+ pub struct Seq<'w, 'k, W: Write> {
+     ser: ContentSerializer<'w, 'k, W>,
++    /// Whether a primitive may follow the preceding visible output.
++    allow_primitive: bool,
+     /// Classification of the result of the last serialized element.
+     last: WriteResult,
+ }
+@@ -427,8 +430,24 @@
+     where
+         T: ?Sized + Serialize,
+     {
+-        self.last = value.serialize(self.ser.new_seq_element_serializer(self.last.is_text()))?;
+-        // Write indent for next element if indents are used
++        let result = value.serialize(self.ser.new_seq_element_serializer(self.allow_primitive))?;
++        match result {
++            WriteResult::Text | WriteResult::SensitiveText => {
++                self.allow_primitive = false;
++                self.last = result;
++            }
++            WriteResult::Element => {
++                self.allow_primitive = true;
++                self.last = result;
++            }
++            WriteResult::Nothing | WriteResult::SensitiveNothing => {
++                // An absent value is not a delimiter between text nodes.
++                if matches!(self.last, WriteResult::Nothing | WriteResult::SensitiveNothing) {
++                    self.last = result;
++                }
++            }
++        }
++        // Write indent for next element if indents are used.
+         self.ser.write_indent = self.last.allow_indent();
+         Ok(())
+     }
+@@ -594,6 +613,42 @@
+         },
+     }
+ 
++    #[test]
++    fn mixed_text_sequence_round_trip() {
++        #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
++        enum Item {
++            #[serde(rename = "$text")]
++            Text(String),
++            Marker,
++        }
++        #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
++        struct Root {
++            #[serde(rename = "$value")]
++            items: Vec<Item>,
++        }
++        let root = Root { items: vec![Item::Text("a & b".into()), Item::Marker, Item::Text("c".into())] };
++        let xml = crate::se::to_string(&root).unwrap();
++        assert_eq!(xml, "<Root>a &amp; b<Marker/>c</Root>");
++        assert_eq!(crate::de::from_str::<Root>(&xml).unwrap(), root);
++        let single = Root { items: vec![Item::Text("a".into())] };
++        let xml = crate::se::to_string(&single).unwrap();
++        assert_eq!(xml, "<Root>a</Root>");
++        assert_eq!(crate::de::from_str::<Root>(&xml).unwrap(), single);
++    }
++
++    #[test]
++    fn absent_items_do_not_delimit_text() {
++        #[derive(serde::Serialize)]
++        struct Root {
++            #[serde(rename = "$value")]
++            items: Vec<Option<String>>,
++        }
++        let root = Root { items: vec![Some("a".into()), None, Some("b".into())] };
++        assert!(crate::se::to_string(&root).is_err());
++        let root = Root { items: vec![None, Some("a".into()), None] };
++        assert_eq!(crate::se::to_string(&root).unwrap(), "<Root>a</Root>");
++    }
++
+     mod without_indent {
+         use super::Struct;
+         use super::*;
