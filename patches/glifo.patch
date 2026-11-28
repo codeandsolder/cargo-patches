@@ -829,7 +829,7 @@ index 3347cd6..5e305a9 100644
 -
 +    let tint = if mask {
 +        match renderer.current_paint() {
-+            PaintType::Solid(color) => Some(Tint {
++            vello_common::paint::PaintType::Solid(color) => Some(Tint {
 +                color: *color,
 +                mode: TintMode::AlphaMask,
 +            }),
