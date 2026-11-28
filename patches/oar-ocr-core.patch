@@ -1,22 +1,24 @@
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -48,6 +48,7 @@
+@@ -48,6 +48,8 @@
  cuda = ["ort/cuda"]
  default = [
      "download-binaries",
 +    "image-formats",
++    "formula-recognition",
      "simd",
  ]
  directml = ["ort/directml"]
-@@ -55,6 +56,7 @@
+@@ -55,6 +57,8 @@
      "ort/download-binaries",
      "ort/tls-native",
  ]
++formula-recognition = ["dep:tokenizers"]
 +image-formats = ["image/default-formats"]
  openvino = ["ort/openvino"]
  simd = [
      "dep:wide",
-@@ -88,9 +90,13 @@
+@@ -88,9 +92,13 @@
 
  [dependencies.image]
  version = "0.25.10"
@@ -30,3 +32,213 @@
 
  [dependencies.multiversion]
  version = "0.9"
+@@ -141,6 +149,7 @@
+
+ [dependencies.tokenizers]
+ version = "0.23"
++optional = true
+ features = [
+     "progressbar",
+     "onig",
+--- a/src/core/macros.rs
++++ b/src/core/macros.rs
+@@ -24,9 +24,10 @@
+ ///
+ /// The `TaskDefinition` trait provides task metadata (name, doc, empty()) for runtime.
+ /// The `doc` field in the registry is used for `#[doc]` attributes on enum variants.
+-#[macro_export]
+-macro_rules! with_task_registry {
+-    ($callback:path) => {
++#[doc(hidden)]
++#[macro_export]
++macro_rules! __with_task_registry {
++    ($callback:path, $($optional:tt)*) => {
+         $callback! {
+             TextDetection {
+                 output: $crate::domain::tasks::TextDetectionOutput,
+@@ -77,6 +78,47 @@
+                 conversion: into_table_cell_detection,
+                 doc: "Table cell detection - locating cells within table regions",
+             },
++            SealTextDetection {
++                output: $crate::domain::tasks::SealTextDetectionOutput,
++                adapter: $crate::domain::adapters::SealTextDetectionAdapter,
++                constructor: seal_text_detection,
++                conversion: into_seal_text_detection,
++                doc: "Seal text detection - locating text regions in seal/stamp images",
++            },
++            TableClassification {
++                output: $crate::domain::tasks::TableClassificationOutput,
++                adapter: $crate::domain::adapters::TableClassificationAdapter,
++                constructor: table_classification,
++                conversion: into_table_classification,
++                doc: "Table classification - classifying table images as wired or wireless",
++            },
++            TableStructureRecognition {
++                output: $crate::domain::tasks::TableStructureRecognitionOutput,
++                adapter: $crate::domain::adapters::TableStructureRecognitionAdapter,
++                constructor: table_structure_recognition,
++                conversion: into_table_structure_recognition,
++                doc: "Table structure recognition - recognizing table structure as HTML with bboxes",
++            },
++            $($optional)*
++        }
++    };
++}
++
++// Resolve optional task registration in this crate, even for macro callers
++// with a different set of Cargo features.
++#[cfg(not(feature = "formula-recognition"))]
++#[macro_export]
++macro_rules! with_task_registry {
++    ($callback:path) => {
++        $crate::__with_task_registry! { $callback, }
++    };
++}
++
++#[cfg(feature = "formula-recognition")]
++#[macro_export]
++macro_rules! with_task_registry {
++    ($callback:path) => {
++        $crate::__with_task_registry! { $callback,
+             FormulaRecognition {
+                 output: $crate::domain::tasks::FormulaRecognitionOutput,
+                 adapter: $crate::domain::adapters::FormulaRecognitionAdapter,
+@@ -84,27 +126,6 @@
+                 conversion: into_formula_recognition,
+                 doc: "Formula recognition - converting mathematical formulas to LaTeX",
+             },
+-            SealTextDetection {
+-                output: $crate::domain::tasks::SealTextDetectionOutput,
+-                adapter: $crate::domain::adapters::SealTextDetectionAdapter,
+-                constructor: seal_text_detection,
+-                conversion: into_seal_text_detection,
+-                doc: "Seal text detection - locating text regions in seal/stamp images",
+-            },
+-            TableClassification {
+-                output: $crate::domain::tasks::TableClassificationOutput,
+-                adapter: $crate::domain::adapters::TableClassificationAdapter,
+-                constructor: table_classification,
+-                conversion: into_table_classification,
+-                doc: "Table classification - classifying table images as wired or wireless",
+-            },
+-            TableStructureRecognition {
+-                output: $crate::domain::tasks::TableStructureRecognitionOutput,
+-                adapter: $crate::domain::adapters::TableStructureRecognitionAdapter,
+-                constructor: table_structure_recognition,
+-                conversion: into_table_structure_recognition,
+-                doc: "Table structure recognition - recognizing table structure as HTML with bboxes",
+-            }
+         }
+     };
+ }
+--- a/src/domain/adapters/mod.rs
++++ b/src/domain/adapters/mod.rs
+@@ -24,6 +24,7 @@
+ pub mod text_line_orientation_adapter;
+
+ // Formula recognition adapters
++#[cfg(feature = "formula-recognition")]
+ pub mod formula_recognition_adapter;
+
+ // Rectification adapters
+@@ -62,6 +63,7 @@
+ };
+
+ // Re-export formula recognition adapters
++#[cfg(feature = "formula-recognition")]
+ pub use formula_recognition_adapter::{
+     FormulaModelConfig, FormulaRecognitionAdapter, PPFormulaNetAdapter, PPFormulaNetAdapterBuilder,
+     UniMERNetAdapterBuilder, UniMERNetFormulaAdapter,
+--- a/src/domain/tasks/mod.rs
++++ b/src/domain/tasks/mod.rs
+@@ -4,6 +4,7 @@
+
+ pub mod document_orientation;
+ pub mod document_rectification;
++#[cfg(feature = "formula-recognition")]
+ pub mod formula_recognition;
+ pub mod layout_detection;
+ pub mod seal_text_detection;
+@@ -21,6 +22,7 @@
+ pub use document_rectification::{
+     DocumentRectificationConfig, DocumentRectificationOutput, DocumentRectificationTask,
+ };
++#[cfg(feature = "formula-recognition")]
+ pub use formula_recognition::{
+     FormulaRecognitionConfig, FormulaRecognitionOutput, FormulaRecognitionTask,
+ };
+--- a/src/models/recognition/mod.rs
++++ b/src/models/recognition/mod.rs
+@@ -5,16 +5,20 @@
+ pub mod crnn;
+ #[cfg(feature = "cuda")]
+ mod ctc_cuda;
++#[cfg(feature = "formula-recognition")]
+ pub mod pp_formulanet;
+ pub mod slanet;
++#[cfg(feature = "formula-recognition")]
+ pub mod unimernet;
+
+ pub use crnn::{CRNNModel, CRNNModelBuilder, CRNNModelOutput, CRNNPreprocessConfig};
++#[cfg(feature = "formula-recognition")]
+ pub use pp_formulanet::{
+     PPFormulaNetModel, PPFormulaNetModelBuilder, PPFormulaNetModelOutput,
+     PPFormulaNetPostprocessConfig, PPFormulaNetPreprocessConfig,
+ };
+ pub use slanet::{SLANetModel, SLANetModelBuilder, SLANetModelOutput};
++#[cfg(feature = "formula-recognition")]
+ pub use unimernet::{
+     UniMERNetModel, UniMERNetModelBuilder, UniMERNetModelOutput, UniMERNetPostprocessConfig,
+     UniMERNetPreprocessConfig,
+--- a/src/predictors/mod.rs
++++ b/src/predictors/mod.rs
+@@ -49,6 +49,7 @@
+
+ pub mod document_orientation;
+ pub mod document_rectification;
++#[cfg(feature = "formula-recognition")]
+ pub mod formula_recognition;
+ pub mod layout_detection;
+ pub mod seal_text_detection;
+@@ -61,6 +62,7 @@
+
+ pub use document_orientation::DocumentOrientationPredictor;
+ pub use document_rectification::DocumentRectificationPredictor;
++#[cfg(feature = "formula-recognition")]
+ pub use formula_recognition::{FormulaModelKind, FormulaRecognitionPredictor};
+ pub use layout_detection::LayoutDetectionPredictor;
+ pub use seal_text_detection::SealTextDetectionPredictor;
+--- a/src/processors/mod.rs
++++ b/src/processors/mod.rs
+@@ -22,6 +22,7 @@
+ mod aspect_ratio_bucketing;
+ pub mod db_postprocess;
+ mod decode;
++#[cfg(feature = "formula-recognition")]
+ pub mod formula_preprocess;
+ mod geometry;
+ pub mod layout_postprocess;
+@@ -35,6 +36,7 @@
+ pub mod table_ocr_split;
+ pub mod table_structure_decode;
+ pub mod types;
++#[cfg(feature = "formula-recognition")]
+ pub mod unimernet_preprocess;
+ pub mod uvdoc_postprocess;
+
+@@ -43,6 +45,7 @@
+ pub use db_postprocess::*;
+ pub(crate) use decode::CTCArgmaxOutput;
+ pub use decode::*;
++#[cfg(feature = "formula-recognition")]
+ pub use formula_preprocess::{FormulaPreprocessParams, FormulaPreprocessor, normalize_latex};
+ pub use geometry::*;
+ pub use layout_postprocess::*;
+@@ -69,5 +72,6 @@
+     wrap_table_html, wrap_table_html_with_content,
+ };
+ pub use types::*;
++#[cfg(feature = "formula-recognition")]
+ pub use unimernet_preprocess::{UniMERNetPreprocessParams, UniMERNetPreprocessor};
+ pub use uvdoc_postprocess::*;
