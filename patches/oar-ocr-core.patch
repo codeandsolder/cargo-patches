@@ -1,6 +1,6 @@
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -48,6 +48,8 @@
+@@ -48,13 +48,17 @@
  cuda = ["ort/cuda"]
  default = [
      "download-binaries",
@@ -9,9 +9,10 @@
      "simd",
  ]
  directml = ["ort/directml"]
-@@ -55,6 +57,8 @@
+ download-binaries = [
      "ort/download-binaries",
-     "ort/tls-native",
+-    "ort/tls-native",
++    "ort/tls-rustls-platform",
  ]
 +formula-recognition = ["dep:tokenizers"]
 +image-formats = ["image/default-formats"]
@@ -40,6 +41,17 @@
  features = [
      "progressbar",
      "onig",
+@@ -152,9 +161,6 @@
+
+ [dependencies.ureq]
+ version = "3.0"
+-features = [
+-    "rustls",
+-    "platform-verifier",
+-]
++features = ["rustls"]
+ optional = true
+ default-features = false
 --- a/src/core/macros.rs
 +++ b/src/core/macros.rs
 @@ -24,9 +24,10 @@

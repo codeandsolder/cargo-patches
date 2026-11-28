@@ -45,8 +45,8 @@ The Reqsign validation workspace pins the original test-helper dependency versio
 
 ## OAR OCR feature ownership
 
-The `oar-image-features` family imports the two matching 0.11.0 registry
-crates. `image-formats` is independently selectable (enabled by the
+The `oar-image-features` family imports both matching OAR 0.11.0 registry
+crates and their exact ORT 2.0.0-rc.15 library and bindings. `image-formats` is independently selectable (enabled by the
 standalone defaults); an RGB-buffer consumer can disable defaults and
 select only its own encoded formats through `image`. Both OAR packages
 retain Rayon for image processing, without the unused imageproc text
@@ -60,6 +60,15 @@ order helpers are independent of Indra. Recognition algorithms and model
 provisioning are unchanged.
 The validation workspace exercises raw RGB, narrow PNG/PNM, and full
 format configurations through the actual OAR utility APIs.
+
+ORT's `tls-rustls-platform` feature explicitly retains platform certificate
+verification with Rustls for build-time binary downloads and optional runtime
+model downloads. OAR selects this for `download-binaries`; its own runtime
+downloader retains WebPKI verification. ORT uses the existing SHA-2 0.11
+implementation for binary integrity and optional model cache keys. Family
+validation exercises the actual TLS-selection and streaming hash helpers
+without weakening certificate verification, and checks the dependency graph
+for absence of native TLS and the separate HMAC/SHA-256 crate.
 
 ## Shared imaging glyph atlas
 

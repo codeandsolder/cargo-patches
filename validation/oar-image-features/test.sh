@@ -111,3 +111,45 @@ fi
 cargo check --locked --no-default-features --features formula-recognition --tests
 cargo check --locked --no-default-features --features indra --tests
 cargo test --locked --features full-formats,formula-recognition,indra --test image_features
+
+# Exercise the actual downloader helpers without fetching external models or
+# bypassing the compiler cache. The build script itself compiles with
+# download-binaries enabled; load-dynamic avoids linking the distribution.
+cat > download_tls.rs <<'RS'
+#[path = "ort-sys/build/download/tls.rs"]
+mod tls;
+#[path = "ort-sys/build/download/verify.rs"]
+mod verify;
+use std::io::{Cursor, Read};
+use ureq::tls::{RootCerts, TlsProvider};
+
+#[test]
+fn rustls_retains_platform_trust_and_verification() {
+    let config = tls::download_tls_config();
+    assert_eq!(config.provider(), TlsProvider::Rustls);
+    assert!(matches!(config.root_certs(), RootCerts::PlatformVerifier));
+    assert!(!config.disable_verification());
+}
+
+#[test]
+fn sha256_covers_partially_read_and_unread_data() {
+    let mut reader = verify::VerifyReader::new(Cursor::new(b"abc"));
+    let mut prefix = [0; 1];
+    reader.read_exact(&mut prefix).unwrap();
+    assert_eq!(prefix, [b'a']);
+    let (digest, source) = reader.finalize().unwrap();
+    let expected = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    assert_eq!(verify::bytes_to_hex_str(&digest), expected);
+    assert_eq!(digest.as_slice(), verify::hex_str_to_bytes(expected));
+    assert_eq!(source.position(), 3);
+}
+RS
+download=$(cargo tree --locked --target all --no-default-features --features tls-rustls-platform -e normal,build --prefix none --format '{p}')
+if printf '%s\n' "$download" | rg '^(native-tls|openssl|openssl-sys|hmac-sha256) v|^sha2 v0\.10'; then
+    echo 'Unexpected native TLS or duplicate SHA-256 implementation' >&2
+    exit 1
+fi
+for crate in rustls rustls-platform-verifier ureq sha2; do
+    printf '%s\n' "$download" | rg "^$crate v" >/dev/null
+done
+cargo test --locked --no-default-features --features tls-rustls-platform --test download_tls
