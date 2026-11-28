@@ -51,8 +51,7 @@ mod order;
 mod recognize;
 mod rtl;
 
-pub(crate) use layout::median_f64;
-pub(crate) use order::{is_digit, median_f32};
+use crate::reading_helpers::median_f32;
 
 use image::{GrayImage, RgbImage};
 use oar_ocr_core::core::OCRError;
@@ -723,7 +722,7 @@ impl Engine {
         let (mut boxes, mut scale) = self.detect_at(gray, self.long_side)?;
         if boxes.len() >= 8 {
             let mut heights: Vec<f32> = boxes.iter().map(|b| b[3] - b[1]).collect();
-            let med_h = order::median_f32(&mut heights);
+            let med_h = median_f32(&mut heights);
             if med_h < ADAPTIVE_MIN_H {
                 let target = (self.long_side as f32 * ADAPTIVE_TARGET_H / med_h.max(1.0)) as f64;
                 let ls = (target.min(ADAPTIVE_MAX_SIDE as f64) as usize) / 32 * 32;

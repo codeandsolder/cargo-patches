@@ -156,7 +156,7 @@ impl OAROCR {
                 continue;
             }
             floating = true;
-            let typical = crate::indra::median_f64(&mut ratios);
+            let typical = crate::reading_helpers::median_f64(&mut ratios);
             for &(i, f) in &frames {
                 if reach[i][side] > 0. {
                     continue;
@@ -203,7 +203,7 @@ impl OAROCR {
             let old = text::canonical(&reads[i].text);
             let number = |s: &str| {
                 s.chars()
-                    .filter(|c| crate::indra::is_digit(*c))
+                    .filter(|c| crate::reading_helpers::is_digit(*c))
                     .collect::<String>()
             };
             if text::drop_reason(&new, r.confidence, self.rec_score_threshold, None).is_some()

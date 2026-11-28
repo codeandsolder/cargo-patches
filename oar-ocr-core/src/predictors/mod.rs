@@ -49,6 +49,7 @@ where
 
 pub mod document_orientation;
 pub mod document_rectification;
+#[cfg(feature = "formula-recognition")]
 pub mod formula_recognition;
 pub mod layout_detection;
 pub mod seal_text_detection;
@@ -61,6 +62,7 @@ pub mod text_recognition;
 
 pub use document_orientation::DocumentOrientationPredictor;
 pub use document_rectification::DocumentRectificationPredictor;
+#[cfg(feature = "formula-recognition")]
 pub use formula_recognition::{FormulaModelKind, FormulaRecognitionPredictor};
 pub use layout_detection::LayoutDetectionPredictor;
 pub use seal_text_detection::SealTextDetectionPredictor;

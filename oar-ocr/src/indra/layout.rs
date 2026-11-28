@@ -2,7 +2,8 @@
 //! a new block starts wherever the same-block logit between consecutive
 //! lines is negative, and each block renders by its class.
 
-use super::order::{BLOCK_CLASSES, Square, cluster, group_class, median_f32};
+use super::order::{BLOCK_CLASSES, Square, cluster, group_class};
+use crate::reading_helpers::{median_f32, median_f64};
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -100,16 +101,6 @@ fn rows(boxes: &[[f32; 4]]) -> Vec<Vec<usize>> {
         r.sort_by(|&a, &b| boxes[a][0].total_cmp(&boxes[b][0]));
     }
     rows
-}
-
-pub(crate) fn median_f64(values: &mut [f64]) -> f64 {
-    values.sort_by(f64::total_cmp);
-    let n = values.len();
-    if n % 2 == 1 {
-        values[n / 2]
-    } else {
-        (values[n / 2 - 1] + values[n / 2]) / 2.0
-    }
 }
 
 /// Joins the line rows of wrapped cells into one table row: a gap under half

@@ -45,10 +45,14 @@ cuda = ["oar-ocr-core/cuda"]
 default = [
     "download-binaries",
     "image-formats",
+    "formula-recognition",
+    "indra",
     "simd",
 ]
 directml = ["oar-ocr-core/directml"]
 download-binaries = ["oar-ocr-core/download-binaries"]
+formula-recognition = ["oar-ocr-core/formula-recognition"]
+indra = ["dep:zip", "dep:unicode-bidi"]
 image-formats = ["image/default-formats", "oar-ocr-core/image-formats"]
 openvino = ["oar-ocr-core/openvino"]
 simd = ["oar-ocr-core/simd"]
@@ -74,10 +78,12 @@ path = "examples/document_rectification.rs"
 [[example]]
 name = "formula_recognition"
 path = "examples/formula_recognition.rs"
+required-features = ["formula-recognition"]
 
 [[example]]
 name = "indra"
 path = "examples/indra.rs"
+required-features = ["indra"]
 
 [[example]]
 name = "layout_detection"
@@ -94,6 +100,7 @@ path = "examples/seal_text_detection.rs"
 [[example]]
 name = "structure"
 path = "examples/structure.rs"
+required-features = ["formula-recognition"]
 
 [[example]]
 name = "table_cell_detection"
@@ -166,6 +173,7 @@ version = "0.1"
 
 [dependencies.unicode-bidi]
 version = "0.3.18"
+optional = true
 
 [dependencies.unicode-normalization]
 version = "0.1.25"
@@ -177,6 +185,7 @@ default-features = false
 
 [dependencies.zip]
 version = "9.5"
+optional = true
 features = ["deflate-flate2-zlib-rs"]
 default-features = false
 

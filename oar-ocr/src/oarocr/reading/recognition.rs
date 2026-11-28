@@ -270,7 +270,7 @@ pub(super) fn words(read: &Reading, q: &Quad, back: &Transform, thai: bool) -> V
         (tokens.last().unwrap().last().unwrap().right - tokens[0][0].left)
             / tokens.iter().map(Vec::len).sum::<usize>() as f64
     } else {
-        crate::indra::median_f64(&mut steps)
+        crate::reading_helpers::median_f64(&mut steps)
     };
     let mut words = Vec::new();
     for (i, t) in tokens.iter().enumerate() {

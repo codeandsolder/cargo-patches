@@ -24,9 +24,10 @@
 ///
 /// The `TaskDefinition` trait provides task metadata (name, doc, empty()) for runtime.
 /// The `doc` field in the registry is used for `#[doc]` attributes on enum variants.
+#[doc(hidden)]
 #[macro_export]
-macro_rules! with_task_registry {
-    ($callback:path) => {
+macro_rules! __with_task_registry {
+    ($callback:path, $($optional:tt)*) => {
         $callback! {
             TextDetection {
                 output: $crate::domain::tasks::TextDetectionOutput,
@@ -77,13 +78,6 @@ macro_rules! with_task_registry {
                 conversion: into_table_cell_detection,
                 doc: "Table cell detection - locating cells within table regions",
             },
-            FormulaRecognition {
-                output: $crate::domain::tasks::FormulaRecognitionOutput,
-                adapter: $crate::domain::adapters::FormulaRecognitionAdapter,
-                constructor: formula_recognition,
-                conversion: into_formula_recognition,
-                doc: "Formula recognition - converting mathematical formulas to LaTeX",
-            },
             SealTextDetection {
                 output: $crate::domain::tasks::SealTextDetectionOutput,
                 adapter: $crate::domain::adapters::SealTextDetectionAdapter,
@@ -104,7 +98,34 @@ macro_rules! with_task_registry {
                 constructor: table_structure_recognition,
                 conversion: into_table_structure_recognition,
                 doc: "Table structure recognition - recognizing table structure as HTML with bboxes",
-            }
+            },
+            $($optional)*
+        }
+    };
+}
+
+// Resolve optional task registration in this crate, even for macro callers
+// with a different set of Cargo features.
+#[cfg(not(feature = "formula-recognition"))]
+#[macro_export]
+macro_rules! with_task_registry {
+    ($callback:path) => {
+        $crate::__with_task_registry! { $callback, }
+    };
+}
+
+#[cfg(feature = "formula-recognition")]
+#[macro_export]
+macro_rules! with_task_registry {
+    ($callback:path) => {
+        $crate::__with_task_registry! { $callback,
+            FormulaRecognition {
+                output: $crate::domain::tasks::FormulaRecognitionOutput,
+                adapter: $crate::domain::adapters::FormulaRecognitionAdapter,
+                constructor: formula_recognition,
+                conversion: into_formula_recognition,
+                doc: "Formula recognition - converting mathematical formulas to LaTeX",
+            },
         }
     };
 }

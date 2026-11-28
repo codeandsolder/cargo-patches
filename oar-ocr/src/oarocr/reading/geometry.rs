@@ -13,7 +13,7 @@ pub(super) fn median(mut xs: Vec<f32>) -> f32 {
     if xs.is_empty() {
         0.
     } else {
-        crate::indra::median_f32(&mut xs)
+        crate::reading_helpers::median_f32(&mut xs)
     }
 }
 
@@ -46,7 +46,7 @@ pub(super) fn skew(boxes: &[Quad]) -> f64 {
     if angles.is_empty() {
         0.
     } else {
-        crate::indra::median_f64(&mut angles)
+        crate::reading_helpers::median_f64(&mut angles)
     }
 }
 

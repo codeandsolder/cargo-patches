@@ -49,6 +49,7 @@ cuda = ["ort/cuda"]
 default = [
     "download-binaries",
     "image-formats",
+    "formula-recognition",
     "simd",
 ]
 directml = ["ort/directml"]
@@ -56,6 +57,7 @@ download-binaries = [
     "ort/download-binaries",
     "ort/tls-native",
 ]
+formula-recognition = ["dep:tokenizers"]
 image-formats = ["image/default-formats"]
 openvino = ["ort/openvino"]
 simd = [
@@ -147,6 +149,7 @@ version = "2.0"
 
 [dependencies.tokenizers]
 version = "0.23"
+optional = true
 features = [
     "progressbar",
     "onig",

@@ -22,6 +22,7 @@
 mod aspect_ratio_bucketing;
 pub mod db_postprocess;
 mod decode;
+#[cfg(feature = "formula-recognition")]
 pub mod formula_preprocess;
 mod geometry;
 pub mod layout_postprocess;
@@ -35,6 +36,7 @@ mod sorting;
 pub mod table_ocr_split;
 pub mod table_structure_decode;
 pub mod types;
+#[cfg(feature = "formula-recognition")]
 pub mod unimernet_preprocess;
 pub mod uvdoc_postprocess;
 
@@ -43,6 +45,7 @@ pub use aspect_ratio_bucketing::*;
 pub use db_postprocess::*;
 pub(crate) use decode::CTCArgmaxOutput;
 pub use decode::*;
+#[cfg(feature = "formula-recognition")]
 pub use formula_preprocess::{FormulaPreprocessParams, FormulaPreprocessor, normalize_latex};
 pub use geometry::*;
 pub use layout_postprocess::*;
@@ -69,6 +72,7 @@ pub use table_structure_decode::{
     wrap_table_html, wrap_table_html_with_content,
 };
 pub use types::*;
+#[cfg(feature = "formula-recognition")]
 pub use unimernet_preprocess::{UniMERNetPreprocessParams, UniMERNetPreprocessor};
 pub use uvdoc_postprocess::*;
 

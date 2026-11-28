@@ -2,6 +2,8 @@
 //! pairwise logits, and the XY-cut and top-down baselines it falls back on
 //! inside blocks.
 
+use crate::reading_helpers::{is_digit, median_f32};
+
 /// Block classes of the order model's layout head.
 pub(super) const BLOCK_CLASSES: [&str; 10] = [
     "Text",
@@ -29,27 +31,6 @@ impl Square<'_> {
     pub(super) fn at(&self, i: usize, j: usize) -> f32 {
         self.data[i * self.n + j]
     }
-}
-
-/// Median as numpy computes it on float32 data.
-pub(crate) fn median_f32(values: &mut [f32]) -> f32 {
-    values.sort_by(f32::total_cmp);
-    let n = values.len();
-    if n % 2 == 1 {
-        values[n / 2]
-    } else {
-        (values[n / 2 - 1] + values[n / 2]) / 2.0
-    }
-}
-
-/// Python's `str.isdigit` for one character, closely enough for features:
-/// decimal and superscript-style digits, not fractions or numeral letters.
-pub(crate) fn is_digit(c: char) -> bool {
-    c.is_numeric()
-        && !matches!(c,
-            '\u{BC}'..='\u{BE}' | '\u{2150}'..='\u{218B}' | '\u{09F4}'..='\u{09F9}'
-            | '\u{3007}' | '\u{3021}'..='\u{3029}' | '\u{3038}'..='\u{303A}'
-            | '\u{4E00}'..='\u{9FFF}')
 }
 
 /// Characters that end a sentence, Latin and CJK.

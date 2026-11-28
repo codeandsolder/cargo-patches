@@ -24,6 +24,7 @@ pub mod table_structure_recognition_adapter;
 pub mod text_line_orientation_adapter;
 
 // Formula recognition adapters
+#[cfg(feature = "formula-recognition")]
 pub mod formula_recognition_adapter;
 
 // Rectification adapters
@@ -62,6 +63,7 @@ pub use text_line_orientation_adapter::{
 };
 
 // Re-export formula recognition adapters
+#[cfg(feature = "formula-recognition")]
 pub use formula_recognition_adapter::{
     FormulaModelConfig, FormulaRecognitionAdapter, PPFormulaNetAdapter, PPFormulaNetAdapterBuilder,
     UniMERNetAdapterBuilder, UniMERNetFormulaAdapter,

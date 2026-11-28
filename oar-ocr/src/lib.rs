@@ -21,7 +21,7 @@
 //! - **Document Rectification**: Fix perspective distortion
 //! - **Text Line Classification**: Detect text line orientation
 //! - **Seal Text Detection**: Detect text in circular seals
-//! - **Formula Recognition**: Recognize mathematical formulas
+//! - **Formula Recognition** (feature `formula-recognition`): Recognize mathematical formulas
 //!
 //! ## Modules
 //!
@@ -83,11 +83,6 @@
 //!     .with_table_cell_detection("table_cell_detection.onnx", "wired")
 //!     .with_table_structure_recognition("table_structure.onnx", "wired")
 //!     .table_structure_dict_path("table_structure_dict.txt")
-//!     .with_formula_recognition(
-//!         "formula_recognition.onnx",
-//!         "tokenizer.json",
-//!         "pp_formulanet"
-//!     )
 //!     .build()?;
 //!
 //! // Analyze document structure
@@ -140,6 +135,8 @@ pub mod utils;
 pub mod oarocr;
 
 // Indra OCR, Datalab's ONNX page reader (its own pipeline)
+mod reading_helpers;
+#[cfg(feature = "indra")]
 pub mod indra;
 
 // Re-export derive macros for convenient use

@@ -4,6 +4,7 @@
 
 pub mod document_orientation;
 pub mod document_rectification;
+#[cfg(feature = "formula-recognition")]
 pub mod formula_recognition;
 pub mod layout_detection;
 pub mod seal_text_detection;
@@ -21,6 +22,7 @@ pub use document_orientation::{
 pub use document_rectification::{
     DocumentRectificationConfig, DocumentRectificationOutput, DocumentRectificationTask,
 };
+#[cfg(feature = "formula-recognition")]
 pub use formula_recognition::{
     FormulaRecognitionConfig, FormulaRecognitionOutput, FormulaRecognitionTask,
 };

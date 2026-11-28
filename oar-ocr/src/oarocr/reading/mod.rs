@@ -93,7 +93,7 @@ impl OAROCR {
             .filter(|r| r.text.chars().count() >= 2)
             .map(|r| r.confidence)
             .collect();
-        if scores.len() < 3 || crate::indra::median_f64(&mut scores) >= 0.8 {
+        if scores.len() < 3 || crate::reading_helpers::median_f64(&mut scores) >= 0.8 {
             return Ok(false);
         }
         let mut ids: Vec<_> = (0..page.boxes.len())
