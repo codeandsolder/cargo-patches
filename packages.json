@@ -225,5 +225,13 @@
       "checksum": "9d7cba514932ebb50de553d2abf395d0702333ea28ba900fec629d88cd4e79a9",
       "patch": "patches/vtkio.patch"
     }
+  ],
+  "cgmath-soundness": [
+    {
+      "name": "cgmath",
+      "version": "0.18.0",
+      "checksum": "1a98d30140e3296250832bbaaff83b27dcd6fa3cc70fb6f1f3e5c9c0023b5317",
+      "patch": "patches/cgmath.patch"
+    }
   ]
 }

@@ -1,0 +1,179 @@
+--- a/src/matrix.rs
++++ b/src/matrix.rs
+@@ -23,7 +23,6 @@
+ use std::iter;
+ use std::mem;
+ use std::ops::*;
+-use std::ptr;
+ 
+ use structure::*;
+ 
+@@ -580,14 +579,20 @@
+ 
+     #[inline]
+     fn swap_columns(&mut self, a: usize, b: usize) {
+-        unsafe { ptr::swap(&mut self[a], &mut self[b]) };
++        let first = self[a];
++        let second = self[b];
++        self[a] = second;
++        self[b] = first;
+     }
+ 
+     #[inline]
+     fn swap_elements(&mut self, a: (usize, usize), b: (usize, usize)) {
+         let (ac, ar) = a;
+         let (bc, br) = b;
+-        unsafe { ptr::swap(&mut self[ac][ar], &mut self[bc][br]) };
++        let first = self[ac][ar];
++        let second = self[bc][br];
++        self[ac][ar] = second;
++        self[bc][br] = first;
+     }
+ 
+     fn transpose(&self) -> Matrix2<S> {
+@@ -679,14 +684,20 @@
+ 
+     #[inline]
+     fn swap_columns(&mut self, a: usize, b: usize) {
+-        unsafe { ptr::swap(&mut self[a], &mut self[b]) };
++        let first = self[a];
++        let second = self[b];
++        self[a] = second;
++        self[b] = first;
+     }
+ 
+     #[inline]
+     fn swap_elements(&mut self, a: (usize, usize), b: (usize, usize)) {
+         let (ac, ar) = a;
+         let (bc, br) = b;
+-        unsafe { ptr::swap(&mut self[ac][ar], &mut self[bc][br]) };
++        let first = self[ac][ar];
++        let second = self[bc][br];
++        self[ac][ar] = second;
++        self[bc][br] = first;
+     }
+ 
+     fn transpose(&self) -> Matrix3<S> {
+@@ -795,14 +806,20 @@
+ 
+     #[inline]
+     fn swap_columns(&mut self, a: usize, b: usize) {
+-        unsafe { ptr::swap(&mut self[a], &mut self[b]) };
++        let first = self[a];
++        let second = self[b];
++        self[a] = second;
++        self[b] = first;
+     }
+ 
+     #[inline]
+     fn swap_elements(&mut self, a: (usize, usize), b: (usize, usize)) {
+         let (ac, ar) = a;
+         let (bc, br) = b;
+-        unsafe { ptr::swap(&mut self[ac][ar], &mut self[bc][br]) };
++        let first = self[ac][ar];
++        let second = self[bc][br];
++        self[ac][ar] = second;
++        self[bc][br] = first;
+     }
+ 
+     fn transpose(&self) -> Matrix4<S> {
+--- a/src/structure.rs
++++ b/src/structure.rs
+@@ -72,10 +72,10 @@
+     /// Swap the elements at indices `i` and `j` in-place.
+     #[inline]
+     fn swap_elements(&mut self, i: usize, j: usize) {
+-        use std::ptr;
+-
+-        // Yeah, ok borrow checker – I know what I'm doing here
+-        unsafe { ptr::swap(&mut self[i], &mut self[j]) };
++        let first = self[i];
++        let second = self[j];
++        self[i] = second;
++        self[j] = first;
+     }
+ 
+     /// The sum of the elements of the array.
+--- /dev/null
++++ b/tests/swap_regressions.rs
+@@ -0,0 +1,80 @@
++extern crate cgmath;
++
++use cgmath::{Array, Matrix, Matrix2, Matrix3, Matrix4, Point1, Point2, Point3, Vector1, Vector2, Vector3, Vector4};
++use std::fmt::Debug;
++use std::panic::{catch_unwind, AssertUnwindSafe};
++
++fn check_array<A: Array + Copy + Debug + PartialEq>(original: A)
++where A::Element: Debug + PartialEq {
++    for i in 0..A::len() {
++        for j in 0..A::len() {
++            let mut swapped = original;
++            swapped.swap_elements(i, j);
++            for k in 0..A::len() {
++                let expected = if k == i { j } else if k == j { i } else { k };
++                assert_eq!(swapped[k], original[expected]);
++            }
++        }
++    }
++    let mut unchanged = original;
++    assert!(catch_unwind(AssertUnwindSafe(|| unchanged.swap_elements(0, A::len()))).is_err());
++    assert_eq!(unchanged, original);
++}
++
++#[test]
++fn arrays_swap_all_index_pairs() {
++    check_array(Vector1::new(1.0));
++    check_array(Vector2::new(1.0, 2.0));
++    check_array(Vector3::new(1.0, 2.0, 3.0));
++    check_array(Vector4::new(1.0, 2.0, 3.0, 4.0));
++    check_array(Point1::new(1.0));
++    check_array(Point2::new(1.0, 2.0));
++    check_array(Point3::new(1.0, 2.0, 3.0));
++}
++
++macro_rules! check_matrix {
++    ($original:expr, $n:expr) => {{
++        let original = $original;
++        let n = $n;
++        for a in 0..n {
++            for b in 0..n {
++                let mut columns = original;
++                columns.swap_columns(a, b);
++                let mut rows = original;
++                rows.swap_rows(a, b);
++                for c in 0..n {
++                    for r in 0..n {
++                        let expected_col = if c == a { b } else if c == b { a } else { c };
++                        let expected_row = if r == a { b } else if r == b { a } else { r };
++                        assert_eq!(columns[c][r], original[expected_col][r]);
++                        assert_eq!(rows[c][r], original[c][expected_row]);
++                    }
++                }
++                for ar in 0..n {
++                    for br in 0..n {
++                        let mut elements = original;
++                        elements.swap_elements((a, ar), (b, br));
++                        for c in 0..n {
++                            for r in 0..n {
++                                let (ec, er) = if (c, r) == (a, ar) { (b, br) } else if (c, r) == (b, br) { (a, ar) } else { (c, r) };
++                                assert_eq!(elements[c][r], original[ec][er]);
++                            }
++                        }
++                    }
++                }
++            }
++        }
++        let mut unchanged = original;
++        assert!(catch_unwind(AssertUnwindSafe(|| unchanged.swap_columns(0, n))).is_err());
++        assert_eq!(unchanged, original);
++        assert!(catch_unwind(AssertUnwindSafe(|| unchanged.swap_elements((0, 0), (0, n)))).is_err());
++        assert_eq!(unchanged, original);
++    }};
++}
++
++#[test]
++fn matrices_swap_all_index_pairs() {
++    check_matrix!(Matrix2::new(1.0, 2.0, 3.0, 4.0), 2);
++    check_matrix!(Matrix3::new(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0), 3);
++    check_matrix!(Matrix4::new(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0), 4);
++}
