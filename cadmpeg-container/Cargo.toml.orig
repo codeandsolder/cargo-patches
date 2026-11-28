@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "cadmpeg-container"
+description = "Budgeted compression and archive support for cadmpeg codecs."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cadmpeg-core = { version = "0.6.12", path = "../cadmpeg-core" }
+flate2 = { version = "1", default-features = false, features = ["zlib-rs", "runtime_detection"] }
+crc32fast.workspace = true
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[dev-dependencies]
+# Test-only byte-fixture writers shared with the codec crates, and raw ZIP fixture assembly:
+# `zip`'s writer cannot emit method 93 without its `zstd` feature (see the workspace manifest), so the
+# Zstandard tests lay their archive out by hand with `zip_fixture`.
+cadmpeg-test-support.workspace = true
+
+[lints]
+workspace = true

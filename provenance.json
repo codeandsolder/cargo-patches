@@ -1,0 +1,17 @@
+{
+  "family": "cadmpeg-compression",
+  "packages": [
+    {
+      "name": "cadmpeg-core",
+      "version": "0.6.12",
+      "checksum": "5f5b7d2834b48bd9929f8428bd511ca5e03d331d36e5f4fbcf20e93fde8e3498",
+      "patch": "patches/cadmpeg-core.patch"
+    },
+    {
+      "name": "cadmpeg-container",
+      "version": "0.6.12",
+      "checksum": "f4ba0d9c310f46c3c626b1ec5b9e1a4db113eb711b65cd4ee4b41b53ac7742b1",
+      "patch": "patches/cadmpeg-container.patch"
+    }
+  ]
+}
