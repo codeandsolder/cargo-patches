@@ -149,9 +149,15 @@
     },
     {
       "name": "usvg",
-      "version": "0.47.0",
-      "checksum": "d46cf96c5f498d36b7a9693bc6a7075c0bb9303189d61b2249b0dc3d309c07de",
+      "version": "0.50.0",
+      "checksum": "bdb896f04730b97805bbc3191fc57e4bf03face0f14577dd42e783c4d8c98802",
       "patch": "patches/usvg.patch"
+    },
+    {
+      "name": "skia-bindings",
+      "version": "0.153.3",
+      "checksum": "eb325787c91b3f6c34a7c6f2b8a2297b20292d733ca53a08c233e5028aec49af",
+      "patch": "patches/skia-bindings.patch"
     }
   ],
   "host-gpu-renderer": [

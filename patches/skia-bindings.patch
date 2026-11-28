@@ -1,0 +1,42 @@
+diff --git a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -122,6 +122,8 @@
+ 
+ [dev-dependencies.flate2]
+ version = "1.0.7"
++default-features = false
++features = ["zlib-rs"]
+ 
+ [dev-dependencies.heck]
+ version = "0.5.0"
+@@ -149,6 +151,8 @@
+ 
+ [build-dependencies.flate2]
+ version = "1.0.7"
++default-features = false
++features = ["zlib-rs"]
+ optional = true
+ 
+ [build-dependencies.heck]
+diff --git a/Cargo.toml.orig b/Cargo.toml.orig
+--- a/Cargo.toml.orig
++++ b/Cargo.toml.orig
+@@ -79,7 +79,7 @@
+ regex = "1.12.3"
+ heck = "0.5.0"
+ 
+-flate2 = { version = "1.0.7", optional = true }
++flate2 = { version = "1.0.7", default-features = false, features = ["zlib-rs"], optional = true }
+ tar = { version = "0.4.45", optional = true }
+ 
+ # For reading .cargo.vcs_info.json to get the repository sha1 that is used to download
+@@ -96,7 +96,7 @@
+ regex = "1.12.3"
+ heck = "0.5.0"
+ # ureq = { version = "2.8.0" }
+-flate2 = { version = "1.0.7" }
++flate2 = { version = "1.0.7", default-features = false, features = ["zlib-rs"] }
+ tar = { version = "0.4.45" }
+ serde_json = "1.0.39"
+ toml = "1.0.3"
