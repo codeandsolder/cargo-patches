@@ -19,12 +19,12 @@ jobs:
           toolchain: nightly-2026-11-28
       - name: Install native validation tools
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends binutils ripgrep jq clang cmake mesa-vulkan-drivers libvulkan1
-      - uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@f22d2e61394d5b0b79314d24d16523eed509d496 # main
+      - uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@5635824a189d1a1d80b2834a08f8b8fbb9452186 # main
         with:
           rust-toolchain: nightly-2026-11-26
       - run: node scripts/publish.mjs --check
       - if: always()
-        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@f22d2e61394d5b0b79314d24d16523eed509d496 # main
+        uses: codeandsolder/ci-workflows/.github/actions/finalize-sccache@5635824a189d1a1d80b2834a08f8b8fbb9452186 # main
   publish:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: check
