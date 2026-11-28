@@ -1,0 +1,26 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 885d135..3b14912 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -49,7 +49,7 @@ path = "src/lib.rs"
+ version = "0.10.2"
+ 
+ [target."cfg(unix)".dependencies.nix]
+-version = "0.31.3"
++version = "0.32.0"
+ features = [
+     "fs",
+     "user",
+diff --git a/Cargo.toml.orig b/Cargo.toml.orig
+index 86a3e1e..667e916 100644
+--- a/Cargo.toml.orig
++++ b/Cargo.toml.orig
+@@ -16,7 +16,7 @@ categories = ["filesystem"]
+ rand = { version = "0.10.2" }
+ 
+ [target.'cfg(unix)'.dependencies]
+-nix = { version = "0.31.3", features = ["fs", "user"] }
++nix = { version = "0.32.0", features = ["fs", "user"] }
+ 
+ [features]
+ default = []
