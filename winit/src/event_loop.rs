@@ -517,6 +517,20 @@ pub struct OwnedDisplayHandle {
     platform: platform_impl::OwnedDisplayHandle,
 }
 
+#[cfg(wayland_platform)]
+impl OwnedDisplayHandle {
+    /// Clone the actual Wayland connection used by the event loop.
+    /// Additional protocol clients can create independent event queues on it.
+    /// Returns None when the selected display is X11.
+    pub fn wayland_connection(&self) -> Option<wayland_client::Connection> {
+        match &self.platform {
+            platform_impl::OwnedDisplayHandle::Wayland(connection) => Some(connection.clone()),
+            #[cfg(x11_platform)]
+            platform_impl::OwnedDisplayHandle::X(_) => None,
+        }
+    }
+}
+
 impl fmt::Debug for OwnedDisplayHandle {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
