@@ -1,0 +1,665 @@
+diff --git a/src/atlas/cache.rs b/src/atlas/cache.rs
+index 717ea2b..4949e3d 100644
+--- a/src/atlas/cache.rs
++++ b/src/atlas/cache.rs
+@@ -5,11 +5,10 @@
+ 
+ use super::commands::AtlasCommandRecorder;
+ use super::key::GlyphCacheKey;
+-#[cfg(all(debug_assertions, feature = "std"))]
+ use super::key::SUBPIXEL_BUCKETS;
+ use super::region::{AtlasSlot, RasterMetrics};
+ use crate::Pixmap;
+-use alloc::sync::Arc;
++use alloc::sync::{Arc, Weak};
+ use alloc::vec::Vec;
+ use core::fmt::{Debug, Formatter};
+ use foldhash::fast::FixedState;
+@@ -117,6 +116,8 @@ pub struct PendingClearRect {
+ /// Does **not** own any pixel storage — that responsibility belongs to the
+ /// concrete wrapper types provided by the integrating renderer crate.
+ pub struct GlyphAtlas {
++    // Only allocated while an explicit prewarm request captures slots.
++    outline_lease_capture: Option<Vec<GlyphAtlasLease>>,
+     /// Eviction configuration.
+     eviction_config: GlyphCacheConfig,
+     /// Entries for non-variable fonts.
+@@ -153,6 +154,7 @@ impl GlyphAtlas {
+     pub fn with_config(eviction_config: GlyphCacheConfig) -> Self {
+         Self {
+             eviction_config,
++            outline_lease_capture: None,
+             static_entries: EMPTY_GLYPH_MAP,
+             variable_entries: EMPTY_VAR_MAP,
+             serial: 0,
+@@ -166,6 +168,26 @@ impl GlyphAtlas {
+         }
+     }
+ 
++    /// Collect outline slot leases during the next prewarm operation.
++    ///
++    /// The caller must take the capture when the operation completes, even on error.
++    /// No ordinary glyph draws should occur between these two calls.
++    pub fn begin_outline_lease_capture(&mut self) {
++        assert!(
++            self.outline_lease_capture.is_none(),
++            "nested outline lease capture"
++        );
++        self.outline_lease_capture = Some(Vec::new());
++    }
++
++    /// Finish an outline lease capture. Leased entries cannot be evicted until
++    /// the last owner releases its lease.
++    pub fn take_outline_leases(&mut self) -> Vec<GlyphAtlasLease> {
++        self.outline_lease_capture
++            .take()
++            .expect("outline lease capture not active")
++    }
++
+     /// Returns a reference to the cache configuration.
+     pub fn config(&self) -> &GlyphCacheConfig {
+         &self.eviction_config
+@@ -194,6 +216,7 @@ impl GlyphAtlas {
+             Some(entry) => {
+                 entry.serial = serial;
+                 self.cache_hits += 1;
++                capture_outline_lease(&mut self.outline_lease_capture, key, entry);
+                 Some(entry.atlas_slot)
+             }
+             None => {
+@@ -238,10 +261,12 @@ impl GlyphAtlas {
+             bearing_y: raster_metrics.bearing_y,
+         };
+ 
+-        let entry = GlyphCacheEntry {
++        let mut entry = GlyphCacheEntry {
+             atlas_slot,
+             serial: self.serial,
++            pin: Weak::new(),
+         };
++        capture_outline_lease(&mut self.outline_lease_capture, &key, &mut entry);
+ 
+         let entries = if key.var_coords.is_empty() {
+             &mut self.static_entries
+@@ -371,7 +396,7 @@ impl GlyphAtlas {
+ 
+         let mut should_retain = |entry: &GlyphCacheEntry| -> bool {
+             let age = serial - entry.serial;
+-            if age > max_entry_age {
++            if age > max_entry_age && entry.pin.strong_count() == 0 {
+                 image_cache.deallocate(entry.atlas_slot.image_id);
+                 *entry_count = entry_count.saturating_sub(1);
+                 push_clear_rect_for_slot(pending_clear_rects, &entry.atlas_slot);
+@@ -391,6 +416,7 @@ impl GlyphAtlas {
+ 
+     /// Clear all cache entries, pending work queues, and statistics.
+     pub fn clear(&mut self) {
++        self.outline_lease_capture = None;
+         self.static_entries.clear();
+         self.variable_entries.clear();
+         self.serial = 0;
+@@ -487,7 +513,9 @@ impl GlyphAtlas {
+ 
+         for key in self.static_entries.keys() {
+             unique_ids.insert(key.glyph_id);
+-            subpixel_dist[key.subpixel_x as usize] += 1;
++            if let Some(bucket) = subpixel_dist.get_mut(usize::from(key.subpixel_x)) {
++                *bucket += 1;
++            }
+             sizes.insert(key.size_bits);
+         }
+ 
+@@ -496,7 +524,9 @@ impl GlyphAtlas {
+         for entries in self.variable_entries.values() {
+             for key in entries.keys() {
+                 unique_ids.insert(key.glyph_id);
+-                subpixel_dist[key.subpixel_x as usize] += 1;
++                if let Some(bucket) = subpixel_dist.get_mut(usize::from(key.subpixel_x)) {
++                    *bucket += 1;
++                }
+                 sizes.insert(key.size_bits);
+             }
+         }
+@@ -623,6 +653,43 @@ struct GlyphCacheEntry {
+     atlas_slot: AtlasSlot,
+     /// Frame serial when last accessed (for LRU eviction).
+     serial: u64,
++    pin: Weak<()>,
++}
++
++/// A stable reference to a monochrome atlas slot. Cloning the lease retains
++/// the slot; dropping the final clone allows normal age-based eviction.
++#[derive(Clone, Debug)]
++pub struct GlyphAtlasLease {
++    slot: AtlasSlot,
++    _pin: Arc<()>,
++}
++
++impl GlyphAtlasLease {
++    /// Atlas page, bounds, and baseline-relative bearings.
++    pub fn slot(&self) -> AtlasSlot {
++        self.slot
++    }
++}
++
++fn capture_outline_lease(
++    capture: &mut Option<Vec<GlyphAtlasLease>>,
++    key: &GlyphCacheKey,
++    entry: &mut GlyphCacheEntry,
++) {
++    if key.subpixel_x >= SUBPIXEL_BUCKETS {
++        return;
++    }
++    if let Some(leases) = capture {
++        let pin = entry.pin.upgrade().unwrap_or_else(|| {
++            let pin = Arc::new(());
++            entry.pin = Arc::downgrade(&pin);
++            pin
++        });
++        leases.push(GlyphAtlasLease {
++            slot: entry.atlas_slot,
++            _pin: pin,
++        });
++    }
+ }
+ 
+ /// Key for variable font caches (owned version).
+diff --git a/src/atlas/key.rs b/src/atlas/key.rs
+index efabfb5..de0e8ee 100644
+--- a/src/atlas/key.rs
++++ b/src/atlas/key.rs
+@@ -17,7 +17,7 @@ use core_maths::CoreFloat as _;
+ use skrifa::instance::NormalizedCoord;
+ use smallvec::SmallVec;
+ 
+-/// Number of horizontal subpixel quantization buckets (valid range: 1–253).
++/// Number of per-axis subpixel quantization buckets (valid range: 1–253).
+ ///
+ /// Higher values improve rendering quality at the cost of more atlas entries
+ /// per glyph. Common values: 1 (disabled), 2, 4 (default), 8.
+@@ -56,11 +56,15 @@ pub struct GlyphCacheKey {
+     pub glyph_id: u32,
+     /// Font size as f32 bits (exact match, no quantization).
+     pub size_bits: u32,
++    /// Vertical strike ppem bits for bitmap glyphs; zero for other glyphs.
++    pub bitmap_y_size_bits: u32,
+     /// Whether hinting was applied.
+     pub hinted: bool,
+     /// Horizontal subpixel position (0 to SUBPIXEL_BUCKETS-1 for outlines),
+     /// or a sentinel (`SUBPIXEL_COLR` / `SUBPIXEL_BITMAP`) for non-outline glyphs.
+     pub subpixel_x: u8,
++    /// Vertical fractional-pixel bucket for outline glyphs.
++    pub subpixel_y: u8,
+     /// Context color for COLR glyphs. Only used for rendering, not for Hash/Eq.
+     pub context_color: AlphaColor<Srgb>,
+     /// Pre-packed context color (premultiplied RGBA8 as u32) used in Hash/Eq.
+@@ -82,7 +86,7 @@ pub struct GlyphCacheKey {
+ impl GlyphCacheKey {
+     /// Creates a new cache key.
+     ///
+-    /// `fractional_x` (the fractional pixel offset) is quantized into
++    /// Each axis of the fractional position is quantized into
+     /// `SUBPIXEL_BUCKETS` buckets, so nearby positions share the same entry.
+     #[inline]
+     pub fn new(
+@@ -91,7 +95,7 @@ impl GlyphCacheKey {
+         glyph_id: u32,
+         size: f32,
+         hinted: bool,
+-        fractional_x: f32,
++        fractional_position: [f32; 2],
+         context_color: AlphaColor<Srgb>,
+         context_color_packed: u32,
+         embolden: FontEmbolden,
+@@ -102,8 +106,10 @@ impl GlyphCacheKey {
+             font_index,
+             glyph_id,
+             size_bits: size.to_bits(),
++            bitmap_y_size_bits: 0,
+             hinted,
+-            subpixel_x: quantize_subpixel(fractional_x),
++            subpixel_x: quantize_subpixel(fractional_position[0]),
++            subpixel_y: quantize_subpixel(fractional_position[1]),
+             context_color,
+             context_color_packed,
+             embolden_x_bits: f32_bits(embolden.amount.xx),
+@@ -127,8 +133,10 @@ impl Hash for GlyphCacheKey {
+         self.font_index.hash(state);
+         self.glyph_id.hash(state);
+         self.size_bits.hash(state);
++        self.bitmap_y_size_bits.hash(state);
+         self.hinted.hash(state);
+         self.subpixel_x.hash(state);
++        self.subpixel_y.hash(state);
+         self.context_color_packed.hash(state);
+         self.embolden_x_bits.hash(state);
+         self.embolden_y_bits.hash(state);
+@@ -143,9 +151,11 @@ impl PartialEq for GlyphCacheKey {
+     fn eq(&self, other: &Self) -> bool {
+         self.glyph_id == other.glyph_id
+             && self.subpixel_x == other.subpixel_x
++            && self.subpixel_y == other.subpixel_y
+             && self.font_id == other.font_id
+             && self.font_index == other.font_index
+             && self.size_bits == other.size_bits
++            && self.bitmap_y_size_bits == other.bitmap_y_size_bits
+             && self.hinted == other.hinted
+             && self.context_color_packed == other.context_color_packed
+             && self.embolden_x_bits == other.embolden_x_bits
+@@ -209,6 +219,12 @@ pub fn subpixel_offset(quantized: u8) -> f32 {
+     quantized as f32 / SUBPIXEL_BUCKETS as f32
+ }
+ 
++/// Snap the entire coordinate, including integer carry, before splitting its phase.
++pub(crate) fn quantize_position(position: f64) -> f64 {
++    let buckets = f64::from(SUBPIXEL_BUCKETS);
++    (position * buckets).round() / buckets
++}
++
+ #[cfg(test)]
+ mod tests {
+     use crate::color::palette::css::BLACK;
+@@ -248,7 +264,7 @@ mod tests {
+             42,
+             16.0,
+             true,
+-            0.3,
++            [0.3, 0.0],
+             BLACK,
+             packed,
+             FontEmbolden::default(),
+@@ -260,7 +276,7 @@ mod tests {
+             42,
+             16.0,
+             true,
+-            0.3,
++            [0.3, 0.0],
+             BLACK,
+             packed,
+             FontEmbolden::default(),
+@@ -278,7 +294,7 @@ mod tests {
+             42,
+             16.0,
+             false,
+-            0.0,
++            [0.0, 0.0],
+             BLACK,
+             packed,
+             FontEmbolden::default(),
+@@ -289,8 +305,10 @@ mod tests {
+             font_index: 0,
+             glyph_id: 42,
+             size_bits: 16.0_f32.to_bits(),
++            bitmap_y_size_bits: 0,
+             hinted: false,
+             subpixel_x: SUBPIXEL_COLR,
++            subpixel_y: 0,
+             context_color: BLACK,
+             context_color_packed: packed,
+             embolden_x_bits: 0,
+@@ -305,8 +323,10 @@ mod tests {
+             font_index: 0,
+             glyph_id: 42,
+             size_bits: 16.0_f32.to_bits(),
++            bitmap_y_size_bits: 0,
+             hinted: false,
+             subpixel_x: SUBPIXEL_BITMAP,
++            subpixel_y: 0,
+             context_color: BLACK,
+             context_color_packed: packed,
+             embolden_x_bits: 0,
+@@ -341,7 +361,7 @@ mod tests {
+             42,
+             16.0,
+             true,
+-            0.3,
++            [0.3, 0.0],
+             BLACK,
+             packed,
+             FontEmbolden::default(),
+@@ -353,7 +373,7 @@ mod tests {
+             42,
+             16.0,
+             true,
+-            0.3,
++            [0.3, 0.0],
+             BLACK,
+             packed,
+             FontEmbolden::default(),
+diff --git a/src/atlas/mod.rs b/src/atlas/mod.rs
+index d9b5c29..72007ca 100644
+--- a/src/atlas/mod.rs
++++ b/src/atlas/mod.rs
+@@ -21,8 +21,8 @@ mod region;
+ #[cfg(all(debug_assertions, feature = "std"))]
+ pub use cache::GlyphCacheStats;
+ pub use cache::{
+-    AtlasConfig, GLYPH_PADDING, GlyphAtlas, GlyphCacheConfig, ImageCache, PendingBitmapUpload,
+-    PendingClearRect,
++    AtlasConfig, GLYPH_PADDING, GlyphAtlas, GlyphAtlasLease, GlyphCacheConfig, ImageCache,
++    PendingBitmapUpload, PendingClearRect,
+ };
+ pub use commands::{AtlasCommand, AtlasCommandRecorder, AtlasPaint};
+ pub use key::GlyphCacheKey;
+diff --git a/src/glyph.rs b/src/glyph.rs
+index b0bea9f..3fbb15b 100644
+--- a/src/glyph.rs
++++ b/src/glyph.rs
+@@ -504,15 +504,24 @@ impl<'a, 'b, Glyphs: Iterator<Item = Glyph> + Clone> GlyphRunRenderer<'a, 'b, Gl
+             // also be assumed to be the case for any other potential backend.)
+             // Therefore, we can calculate the relative paint transform for
+             // the glyph by pre-concatenating it with the inverted outline transform.
+-            let outline_cache_key = outline_cache_enabled.then(|| {
+-                let fractional_x = outline_transform.translation().x.fract() as f32;
++            let outline_cache_key = (outline_cache_enabled
++                && crate::renderer::supports_atlas_caching(
++                    &outline_transform,
++                    CachedGlyphType::Outline,
++                ))
++            .then(|| {
++                let position = outline_transform.translation();
++                let fractional_position = [position.x, position.y].map(|v| {
++                    let snapped = crate::atlas::key::quantize_position(v);
++                    (snapped - snapped.floor()) as f32
++                });
+                 GlyphCacheKey::new(
+                     font_info.id,
+                     font_info.index,
+                     glyph.id,
+                     draw_props.font_size,
+                     hinted,
+-                    fractional_x,
++                    fractional_position,
+                     BLACK,
+                     BLACK_PACKED,
+                     font_embolden,
+@@ -553,8 +562,10 @@ impl<'a, 'b, Glyphs: Iterator<Item = Glyph> + Clone> GlyphRunRenderer<'a, 'b, Gl
+                     font_index: font_info.index,
+                     glyph_id: glyph.id,
+                     size_bits: draw_props.font_size.to_bits(),
++                    bitmap_y_size_bits: 0,
+                     hinted: false,
+                     subpixel_x: SUBPIXEL_COLR,
++                    subpixel_y: 0,
+                     context_color,
+                     context_color_packed,
+                     embolden_x_bits: 0,
+@@ -566,6 +577,10 @@ impl<'a, 'b, Glyphs: Iterator<Item = Glyph> + Clone> GlyphRunRenderer<'a, 'b, Gl
+                 });
+ 
+                 if let Some(ref key) = cache_key
++                    && crate::renderer::supports_atlas_caching(
++                        &outline_transform,
++                        CachedGlyphType::Colr(Rect::ZERO),
++                    )
+                     && let Some(cached_slot) = self.atlas_cacher.get(key)
+                 {
+                     // Use fractional scaled_bbox dimensions to preserve sub-pixel accuracy.
+@@ -618,53 +633,19 @@ impl<'a, 'b, Glyphs: Iterator<Item = Glyph> + Clone> GlyphRunRenderer<'a, 'b, Gl
+ 
+             // ── Bitmap Glyphs ────────────────────────────────────────────
+             let mut bitmap_unavailable_reason = None;
+-            let bitmap_data: Option<(skrifa::bitmap::BitmapGlyph<'_>, Pixmap)> = bitmaps
+-                .glyph_for_size(Size::new(draw_props.font_size), glyph_id)
+-                .and_then(|g| match g.data {
+-                    #[cfg(feature = "png")]
+-                    BitmapData::Png(data) => match Pixmap::from_png(std::io::Cursor::new(data)) {
+-                        Ok(pixmap) => Some((g, pixmap)),
+-                        Err(_) => {
+-                            bitmap_unavailable_reason = Some(GlyphSkipReason::BitmapDecodeFailed);
+-                            None
+-                        }
+-                    },
+-                    #[cfg(not(feature = "png"))]
+-                    BitmapData::Png(_) => {
+-                        bitmap_unavailable_reason = Some(GlyphSkipReason::PngSupportDisabled);
+-                        None
+-                    }
+-                    // The others are not worth implementing for now (unless we can find a test case),
+-                    // they should be very rare.
+-                    BitmapData::Bgra(_) | BitmapData::Mask(_) => {
+-                        bitmap_unavailable_reason = Some(GlyphSkipReason::UnsupportedBitmapFormat);
+-                        None
+-                    }
+-                });
+-
+-            if let Some((bitmap_glyph, pixmap)) = bitmap_data {
+-                // Bitmaps use the strike's own ppem, not the run's, because the
+-                // image was pre-rendered at that specific size.
+-                let bitmap_ppem = bitmap_glyph.ppem_x;
+-                let outline_transform = calculate_bitmap_transform(
+-                    glyph,
+-                    &pixmap,
+-                    draw_props,
+-                    draw_props.font_size,
+-                    font_info.upem,
+-                    &bitmap_glyph,
+-                    is_apple_color_emoji,
+-                );
+-
+-                // Bitmaps are not hinted and have no sub-pixel offset or
+-                // context color; variation coords are irrelevant for fixed strikes.
+-                let cache_key = colr_bitmap_cache_enabled.then(|| GlyphCacheKey {
++            let bitmap_glyph = bitmaps.glyph_for_size(Size::new(draw_props.font_size), glyph_id);
++            let bitmap_data = bitmap_glyph.map(|g| {
++                // Check the strike identity before decoding its image. The cache
++                // owns the decoded dimensions, which need not equal font metadata.
++                let key = colr_bitmap_cache_enabled.then(|| GlyphCacheKey {
+                     font_id: font_info.id,
+                     font_index: font_info.index,
+                     glyph_id: glyph.id,
+-                    size_bits: bitmap_ppem.to_bits(),
++                    size_bits: g.ppem_x.to_bits(),
++                    bitmap_y_size_bits: g.ppem_y.to_bits(),
+                     hinted: false,
+                     subpixel_x: SUBPIXEL_BITMAP,
++                    subpixel_y: 0,
+                     context_color: BLACK,
+                     context_color_packed: BLACK_PACKED,
+                     embolden_x_bits: 0,
+@@ -674,43 +655,79 @@ impl<'a, 'b, Glyphs: Iterator<Item = Glyph> + Clone> GlyphRunRenderer<'a, 'b, Gl
+                     embolden_tolerance_bits: 0.1_f32.to_bits(),
+                     var_coords: SmallVec::new(),
+                 });
++                (g, key)
++            });
+ 
++            if let Some((bitmap_glyph, cache_key)) = bitmap_data {
++                let transform_for_height = |height| {
++                    calculate_bitmap_transform(
++                        glyph,
++                        height,
++                        draw_props,
++                        draw_props.font_size,
++                        font_info.upem,
++                        &bitmap_glyph,
++                        is_apple_color_emoji,
++                    )
++                };
+                 if let Some(ref key) = cache_key
+-                    && let Some(cached_slot) = self.atlas_cacher.get(key)
++                    && crate::renderer::supports_atlas_caching(
++                        &transform_for_height(bitmap_glyph.height),
++                        CachedGlyphType::Bitmap,
++                    )
++                    && let Some(slot) = self.atlas_cacher.get(key)
+                 {
+                     render_cached_glyph(
+                         renderer,
+-                        cached_slot,
+-                        outline_transform,
++                        slot,
++                        transform_for_height(u32::from(slot.height)),
+                         CachedGlyphType::Bitmap,
+                     );
+                     continue;
+                 }
+ 
+-                // Cache miss — wrap the decoded pixmap for rendering.
+-                let glyph_type = create_bitmap_glyph(pixmap);
+-
+-                let prepared_glyph = PreparedGlyph {
+-                    glyph_type,
+-                    outline_transform,
+-                    relative_paint_transform: Affine::IDENTITY,
+-                    cache_key,
++                let decoded: Result<Pixmap, GlyphSkipReason> = match bitmap_glyph.data {
++                    #[cfg(feature = "png")]
++                    BitmapData::Png(data) => match Pixmap::from_png(std::io::Cursor::new(data)) {
++                        Ok(pixmap) => Ok(pixmap),
++                        Err(_) => Err(GlyphSkipReason::BitmapDecodeFailed),
++                    },
++                    #[cfg(not(feature = "png"))]
++                    BitmapData::Png(_) => Err(GlyphSkipReason::PngSupportDisabled),
++                    BitmapData::Bgra(_) | BitmapData::Mask(_) => {
++                        Err(GlyphSkipReason::UnsupportedBitmapFormat)
++                    }
+                 };
+-                match style {
+-                    Style::Fill => fill_glyph(
+-                        renderer,
+-                        prepared_glyph,
+-                        &mut self.atlas_cacher,
+-                        &mut outline_cache_session,
+-                    ),
+-                    Style::Stroke => stroke_glyph(
+-                        renderer,
+-                        prepared_glyph,
+-                        &mut self.atlas_cacher,
+-                        &mut outline_cache_session,
+-                    ),
++                match decoded {
++                    Ok(pixmap) => {
++                        let outline_transform = transform_for_height(u32::from(pixmap.height()));
++                        // Cache miss — wrap the decoded pixmap for rendering.
++                        let glyph_type = create_bitmap_glyph(pixmap);
++
++                        let prepared_glyph = PreparedGlyph {
++                            glyph_type,
++                            outline_transform,
++                            relative_paint_transform: Affine::IDENTITY,
++                            cache_key,
++                        };
++                        match style {
++                            Style::Fill => fill_glyph(
++                                renderer,
++                                prepared_glyph,
++                                &mut self.atlas_cacher,
++                                &mut outline_cache_session,
++                            ),
++                            Style::Stroke => stroke_glyph(
++                                renderer,
++                                prepared_glyph,
++                                &mut self.atlas_cacher,
++                                &mut outline_cache_session,
++                            ),
++                        }
++                        continue;
++                    }
++                    Err(reason) => bitmap_unavailable_reason = Some(reason),
+                 }
+-                continue;
+             }
+ 
+             // ── Outline Glyphs ──────────────────────────────────────────
+@@ -1344,7 +1361,7 @@ fn create_bitmap_glyph(pixmap: Pixmap) -> GlyphType<'static> {
+ /// - Special handling for Apple Color Emoji
+ fn calculate_bitmap_transform(
+     glyph: Glyph,
+-    pixmap: &Pixmap,
++    bitmap_height: u32,
+     draw_props: DrawProps,
+     font_size: f32,
+     upem: f32,
+@@ -1371,7 +1388,7 @@ fn calculate_bitmap_transform(
+         Origin::TopLeft => Vec2::default(),
+         Origin::BottomLeft => Vec2 {
+             x: 0.,
+-            y: -f64::from(pixmap.height()),
++            y: -f64::from(bitmap_height),
+         },
+     };
+ 
+diff --git a/src/renderer.rs b/src/renderer.rs
+index 3347cd6..c1c696b 100644
+--- a/src/renderer.rs
++++ b/src/renderer.rs
+@@ -4,7 +4,7 @@
+ //! Shared glyph rendering logic for rendering backends.
+ 
+ use crate::atlas::commands::{AtlasCommand, AtlasCommandRecorder};
+-use crate::atlas::key::subpixel_offset;
++use crate::atlas::key::{quantize_position, subpixel_offset};
+ use crate::atlas::{AtlasSlot, GlyphAtlas, GlyphCacheKey, ImageCache, RasterMetrics};
+ use crate::colr::ColrPainter;
+ use crate::glyph::{
+@@ -342,15 +342,15 @@ fn render_from_atlas(
+ fn render_outline_to_atlas(
+     path: &Arc<BezPath>,
+     scale: f64,
+-    subpixel_offset: f32,
++    phase: [f32; 2],
+     recorder: &mut AtlasCommandRecorder,
+     atlas_slot: AtlasSlot,
+     raster_metrics: RasterMetrics,
+ ) {
+     let outline_transform =
+         Affine::scale_non_uniform(scale, -scale).then_translate(kurbo::Vec2::new(
+-            atlas_slot.x as f64 - raster_metrics.bearing_x as f64 + subpixel_offset as f64,
+-            atlas_slot.y as f64 - raster_metrics.bearing_y as f64,
++            atlas_slot.x as f64 - raster_metrics.bearing_x as f64 + f64::from(phase[0]),
++            atlas_slot.y as f64 - raster_metrics.bearing_y as f64 + f64::from(phase[1]),
+         ));
+     recorder.set_transform(outline_transform);
+     recorder.set_paint(BLACK.into());
+@@ -409,7 +409,7 @@ fn insert_and_render_outline(
+     let bounds = glyph.bbox.scale_from_origin(glyph.scale);
+     let raster_metrics = calculate_raster_metrics(&bounds);
+ 
+-    let subpixel_offset = subpixel_offset(cache_key.subpixel_x);
++    let phase = [cache_key.subpixel_x, cache_key.subpixel_y].map(subpixel_offset);
+ 
+     let Some((atlas_slot, recorder)) = glyph_atlas.insert(image_cache, cache_key, raster_metrics)
+     else {
+@@ -419,7 +419,7 @@ fn insert_and_render_outline(
+     render_outline_to_atlas(
+         &glyph.path,
+         glyph.scale,
+-        subpixel_offset,
++        phase,
+         recorder,
+         atlas_slot,
+         raster_metrics,
+@@ -526,8 +526,8 @@ fn render_outline_glyph_from_atlas(
+ ) {
+     let [_, _, _, _, tx, ty] = outline_transform.as_coeffs();
+     let rect_transform = Affine::translate((
+-        tx.floor() + atlas_slot.bearing_x as f64,
+-        ty.floor() + atlas_slot.bearing_y as f64,
++        quantize_position(tx).floor() + atlas_slot.bearing_x as f64,
++        quantize_position(ty).floor() + atlas_slot.bearing_y as f64,
+     ));
+     let area = Rect::new(0.0, 0.0, atlas_slot.width as f64, atlas_slot.height as f64);
+     render_from_atlas(
+@@ -589,10 +589,8 @@ fn render_colr_glyph_from_atlas(
+ )]
+ #[inline]
+ pub(crate) fn calculate_raster_metrics(bounds: &Rect) -> RasterMetrics {
+-    // Floor/ceil round outward from the fractional bounding box. Width gets an
+-    // extra pixel to accommodate the horizontal subpixel offset (up to 0.75 px)
+-    // applied when rasterising into the atlas; the Y axis has no subpixel shift
+-    // so floor/ceil alone is sufficient. GLYPH_PADDING in the atlas allocator
++    // Round outward and reserve one extra pixel on each axis for the
++    // fractional phase (up to 0.75 px). GLYPH_PADDING in the atlas allocator
+     // provides the guard band needed by the GPU renderer's Extend::Pad sampling.
+     let min_x = bounds.x0.floor() as i32;
+     let max_x = bounds.x1.ceil() as i32 + 1;
+@@ -600,7 +598,7 @@ pub(crate) fn calculate_raster_metrics(bounds: &Rect) -> RasterMetrics {
+     // For Y, we flip the coordinate system: font Y up -> screen Y down
+     // After flipping Y, min_y becomes -max_y and max_y becomes -min_y
+     let flipped_min_y = (-bounds.y1).floor() as i32;
+-    let flipped_max_y = (-bounds.y0).ceil() as i32;
++    let flipped_max_y = (-bounds.y0).ceil() as i32 + 1;
+ 
+     let width = (max_x - min_x) as u16;
+     let height = (flipped_max_y - flipped_min_y) as u16;

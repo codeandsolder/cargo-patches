@@ -60,3 +60,13 @@ order helpers are independent of Indra. Recognition algorithms and model
 provisioning are unchanged.
 The validation workspace exercises raw RGB, narrow PNG/PNM, and full
 format configurations through the actual OAR utility APIs.
+
+## Shared imaging glyph atlas
+
+The `imaging-glyph-atlas` family imports the pinned Imaging workspace intact,
+with explicitly checked package manifests, alongside exact registry Glifo and
+Vello GPU versions. All consumers of Imaging's public types must select the
+same family revision. Its regression gate exercises ordinary GPU glyph reuse,
+subpixel placement, retained-scene isolation, and leased glyph residency on a
+working WGPU adapter (Mesa Vulkan is sufficient). The atlas is populated on
+first use; fixed-cell consumers can pin just their required glyph subset.

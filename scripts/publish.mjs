@@ -78,7 +78,15 @@ try {
         contents = contents.replaceAll(replacement.from, replacement.to);
       }
       writeFileSync(manifest, contents);
-      if (!new RegExp('^name = "' + pkg.name + '"$', 'm').test(contents)) die('Package name mismatch: ' + pkg.name);
+      if (pkg.workspace_packages !== undefined) {
+        if (pkg.version !== undefined || !Array.isArray(pkg.workspace_packages) || !pkg.workspace_packages.length) die('Invalid workspace source: ' + pkg.name);
+        const members = new Set();
+        for (const member of pkg.workspace_packages) {
+          if (!packagePattern.test(member.name) || members.has(member.name) || typeof member.manifest !== 'string' || !member.manifest.endsWith('/Cargo.toml') || member.manifest.split('/').some(part => !part || part === '.' || part === '..' || part.includes('\\'))) die('Invalid workspace member: ' + pkg.name);
+          members.add(member.name);
+        }
+        if (!members.has(pkg.name)) die('Workspace import name must identify a member: ' + pkg.name);
+      } else if (!new RegExp('^name = "' + pkg.name + '"$', 'm').test(contents)) die('Package name mismatch: ' + pkg.name);
       // Exclude explicitly identified upstream fixtures from the published
       // source, after verifying the exact bytes. Never copy them into Git.
       for (const exclusion of pkg.exclude_files ?? []) {
@@ -103,17 +111,28 @@ try {
       for (const pkg of packages) {
         const manifest = join(staging, pkg.name, 'Cargo.toml');
         const metadata = JSON.parse(run(staging, 'cargo', ['metadata', '--no-deps', '--format-version', '1', '--manifest-path', manifest]));
-        if (!metadata.packages.some(p => p.name === pkg.name && p.manifest_path === manifest)) die('Cargo package not discoverable: ' + pkg.name);
+        if (pkg.workspace_packages !== undefined) {
+          const workspace = join(staging, pkg.name);
+          if (metadata.workspace_root !== workspace) die('Unexpected workspace root: ' + pkg.name);
+          for (const member of pkg.workspace_packages) {
+            if (!metadata.packages.some(p => p.name === member.name && p.manifest_path === join(workspace, member.manifest) && metadata.workspace_members.includes(p.id))) die('Workspace package not discoverable: ' + member.name);
+          }
+        } else if (!metadata.packages.some(p => p.name === pkg.name && p.manifest_path === manifest)) die('Cargo package not discoverable: ' + pkg.name);
       }
       const validation = join(root, 'validation', family);
       if (existsSync(validation)) {
+        // A validation workspace must not enclose an imported workspace:
+        // Cargo otherwise resolves inherited member fields against the parent.
+        const validationRoot = packages.some(pkg => pkg.workspace_packages !== undefined)
+          ? join(scratch, 'validation-' + family) : staging;
+        mkdirSync(validationRoot, {recursive: true});
         for (const file of ['Cargo.toml', 'Cargo.lock']) {
-          const destination = join(staging, file);
+          const destination = join(validationRoot, file);
           if (existsSync(destination)) die('Validation workspace would overwrite imported content: ' + family);
           cpSync(join(validation, file), destination);
         }
         console.log(family + ': running checked family validation');
-        execFileSync('bash', [join(validation, 'test.sh')], {cwd: staging, stdio: 'inherit'});
+        execFileSync('bash', [join(validation, 'test.sh')], {cwd: validationRoot, stdio: 'inherit'});
       }
       continue;
     }
