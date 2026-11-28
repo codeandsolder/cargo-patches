@@ -1,0 +1,105 @@
+[workspace]
+resolver = "2"
+members = [
+    "imaging",
+    "imaging_conformance",
+    "imaging_examples",
+    "imaging_skia",
+    "imaging_snapshot_tests",
+    "imaging_tiny_skia",
+    "imaging_vello",
+    "imaging_vello_cpu",
+    "imaging_vello_hybrid",
+    "imaging_wgpu",
+    "imaging_wind_tunnel",
+    "svg_imaging",
+    "velato_imaging",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+# Keep in sync with RUST_MIN_VER in .github/workflows/ci.yml, with the relevant README.md files
+# and with the MSRV in the `Unreleased` section of CHANGELOG.md.
+rust-version = "1.92"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/forest-rs/imaging"
+
+[workspace.dependencies]
+# Internal crate dependencies are centralized here so path dependencies carry
+# the version requirements needed for packaging.
+imaging = { default-features = false, path = "imaging", version = "0.0.1" }
+imaging_skia = { path = "imaging_skia", version = "0.0.1" }
+imaging_tiny_skia = { path = "imaging_tiny_skia", version = "0.0.1" }
+imaging_vello = { path = "imaging_vello", version = "0.0.2" }
+imaging_vello_cpu = { path = "imaging_vello_cpu", version = "0.0.2" }
+imaging_vello_hybrid = { path = "imaging_vello_hybrid", version = "0.0.2" }
+imaging_wgpu = { default-features = false, path = "imaging_wgpu", version = "0.0.2" }
+svg_imaging = { path = "svg_imaging", version = "0.0.1" }
+velato_imaging = { path = "velato_imaging", version = "0.0.1" }
+
+glifo = { default-features = false, version = "0.5.0" }
+hashbrown = { default-features = false, features = ["default-hasher"], version = "0.17" }
+image = { default-features = false, version = "0.25" }
+kurbo = { default-features = false, version = "0.13.1" }
+peniko = { default-features = false, version = "0.6.1" }
+usvg = { default-features = false, features = ["svgz", "text"], version = "0.50.0" }
+vello_common = { default-features = false, version = "0.4.0" }
+vello_gpu = { default-features = false, version = "0.4.0" }
+wgpu = { default-features = false, version = "30.0.2" }
+
+[workspace.lints]
+# LINEBENDER LINT SET - Cargo.toml - v7
+rust.keyword_idents_2024 = "forbid"
+rust.non_ascii_idents = "forbid"
+rust.non_local_definitions = "forbid"
+rust.unsafe_code = "deny"
+rust.unsafe_op_in_unsafe_fn = "forbid"
+
+rust.elided_lifetimes_in_paths = "warn"
+rust.missing_debug_implementations = "warn"
+rust.missing_docs = "warn"
+rust.trivial_numeric_casts = "warn"
+rust.unnameable_types = "warn"
+rust.unreachable_pub = "warn"
+rust.unused_import_braces = "warn"
+rust.unused_lifetimes = "warn"
+rust.unused_macro_rules = "warn"
+rust.unused_qualifications = "warn"
+
+clippy.too_many_arguments = "allow"
+
+clippy.allow_attributes_without_reason = "warn"
+clippy.cast_possible_truncation = "warn"
+clippy.collection_is_never_read = "warn"
+clippy.dbg_macro = "warn"
+clippy.debug_assert_with_mut_call = "warn"
+clippy.default_trait_access = "warn"
+clippy.doc_markdown = "warn"
+clippy.fn_to_numeric_cast_any = "warn"
+clippy.infinite_loop = "warn"
+clippy.large_stack_arrays = "warn"
+clippy.mismatching_type_param_order = "warn"
+clippy.missing_assert_message = "warn"
+clippy.missing_fields_in_debug = "warn"
+clippy.same_functions_in_if_condition = "warn"
+clippy.semicolon_if_nothing_returned = "warn"
+clippy.should_panic_without_expect = "warn"
+clippy.todo = "warn"
+clippy.unseparated_literal_suffix = "warn"
+clippy.use_self = "warn"
+
+clippy.cargo_common_metadata = "warn"
+clippy.negative_feature_names = "warn"
+clippy.redundant_feature_names = "warn"
+clippy.wildcard_dependencies = "warn"
+# END LINEBENDER LINT SET
+
+[profile.ci]
+inherits = "dev"
+debug = 0
+strip = "debuginfo"
+
+[profile.ci.package."*"]
+debug-assertions = true

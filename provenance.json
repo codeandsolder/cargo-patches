@@ -1,0 +1,49 @@
+{
+  "family": "imaging-glyph-atlas",
+  "packages": [
+    {
+      "name": "imaging",
+      "url": "https://github.com/forest-rs/imaging.git",
+      "rev": "e9123c47b719f392a4803b1587a865fca3660be6",
+      "patch": "patches/imaging.patch",
+      "workspace_packages": [
+        {
+          "name": "imaging",
+          "manifest": "imaging/Cargo.toml"
+        },
+        {
+          "name": "imaging_wgpu",
+          "manifest": "imaging_wgpu/Cargo.toml"
+        },
+        {
+          "name": "imaging_skia",
+          "manifest": "imaging_skia/Cargo.toml"
+        },
+        {
+          "name": "imaging_vello",
+          "manifest": "imaging_vello/Cargo.toml"
+        },
+        {
+          "name": "imaging_vello_hybrid",
+          "manifest": "imaging_vello_hybrid/Cargo.toml"
+        },
+        {
+          "name": "imaging_vello_cpu",
+          "manifest": "imaging_vello_cpu/Cargo.toml"
+        }
+      ]
+    },
+    {
+      "name": "glifo",
+      "version": "0.5.0",
+      "checksum": "9ae2e3b09ea1cc45c994a405e4d4154901d4caa867d3e1be3a02be641f62fefa",
+      "patch": "patches/glifo.patch"
+    },
+    {
+      "name": "vello_gpu",
+      "version": "0.4.0",
+      "checksum": "6a1f838f79b2ef62a4acc61057eca19ffadf496c36317093e2d6961836d6c92f",
+      "patch": "patches/vello_gpu.patch"
+    }
+  ]
+}

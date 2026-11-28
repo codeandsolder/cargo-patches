@@ -1,0 +1,154 @@
+// Copyright 2026 the Imaging Authors
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+//! Crate-local SVG render plan.
+
+use alloc::vec::Vec;
+
+use imaging::{Composite, Filter, MaskMode, filter::FilterGraph};
+use kurbo::{Affine, BezPath, Rect, Stroke};
+use peniko::{Brush, Fill, ImageBrush};
+
+use crate::RenderReport;
+
+/// Lowered render plan for an SVG document.
+#[derive(Clone, Debug)]
+pub(crate) struct RenderPlan {
+    /// Reusable lowered mask definitions referenced from groups.
+    pub(crate) masks: Vec<PlanMask>,
+    /// Lowered nodes ready for emission through `imaging`.
+    pub(crate) nodes: Vec<PlanNode>,
+    /// Unsupported-feature diagnostics collected during lowering.
+    pub(crate) report: RenderReport,
+}
+
+/// A lowered SVG node.
+#[derive(Clone, Debug)]
+pub(crate) enum PlanNode {
+    /// Isolated group with explicit compositing.
+    Group(PlanGroup),
+    /// Filtered content before its SVG clip, mask, opacity, and blend are applied.
+    Filtered {
+        chain: PlanFilterChain,
+        transform: Affine,
+        children: Vec<Self>,
+    },
+    /// Filled path draw.
+    Fill(PlanFill),
+    /// Raster image draw.
+    Image(PlanImage),
+    /// Stroked path draw.
+    Stroke(PlanStroke),
+}
+
+/// Ordered filters in filter user space.
+#[derive(Clone, Debug)]
+pub(crate) enum PlanFilterChain {
+    /// Effects expressible as a linear chain with a crop between stages.
+    Linear {
+        /// Crop applied to the incoming `SourceGraphic`.
+        source_region: Rect,
+        steps: Vec<PlanFilterStep>,
+    },
+    /// One graph per SVG filter definition.
+    Graphs(Vec<FilterGraph>),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PlanFilterStep {
+    pub(crate) effect: Filter,
+    /// Crop applied before passing the effect's result to the next step.
+    pub(crate) output_region: Rect,
+}
+
+/// Lowered isolated group.
+#[derive(Clone, Debug)]
+pub(crate) struct PlanGroup {
+    /// Isolated clip chain applied to the group result.
+    ///
+    /// Multiple entries represent intersected isolated clips, including nested `clip-path`
+    /// references.
+    pub(crate) clips: Vec<PlanClip>,
+    /// Optional retained mask applied to the group result before compositing.
+    pub(crate) mask: Option<PlanAppliedMask>,
+    /// Group compositing state.
+    pub(crate) composite: Composite,
+    /// Child nodes rendered inside the isolated group.
+    pub(crate) children: Vec<PlanNode>,
+}
+
+/// Lowered group clip.
+#[derive(Clone, Debug)]
+pub(crate) enum PlanClip {
+    /// Clip path geometry in the containing scene's coordinates.
+    Path {
+        /// Clip geometry.
+        path: BezPath,
+        /// Fill rule used for the clip.
+        fill_rule: Fill,
+    },
+    /// Union of independently filled or clipped shapes, retained as alpha coverage.
+    Mask(PlanAppliedMask),
+}
+
+/// Identifier for a lowered mask definition.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub(crate) struct PlanMaskId(pub(crate) usize);
+
+/// Lowered retained mask definition.
+#[derive(Clone, Debug)]
+pub(crate) struct PlanMask {
+    /// How the mask scene modulates masked content.
+    pub(crate) mode: MaskMode,
+    /// Child nodes rendered into the mask scene.
+    pub(crate) nodes: Vec<PlanNode>,
+}
+
+/// Lowered application of a retained mask definition.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PlanAppliedMask {
+    /// Referenced mask definition.
+    pub(crate) mask: PlanMaskId,
+    /// Maps the reusable mask definition into destination coordinates.
+    pub(crate) transform: Affine,
+}
+
+/// Lowered fill draw.
+#[derive(Clone, Debug)]
+pub(crate) struct PlanFill {
+    /// Path geometry in local coordinates.
+    pub(crate) path: BezPath,
+    /// Geometry transform.
+    pub(crate) transform: Affine,
+    /// SVG fill rule.
+    pub(crate) fill_rule: Fill,
+    /// Fill brush.
+    pub(crate) brush: Brush,
+    /// Optional brush-space transform.
+    pub(crate) brush_transform: Option<Affine>,
+}
+
+/// Lowered raster image draw.
+#[derive(Clone, Debug)]
+pub(crate) struct PlanImage {
+    /// Decoded image brush and sampling parameters.
+    pub(crate) image: ImageBrush,
+    /// Geometry transform applied when drawing at the image's natural size.
+    pub(crate) transform: Affine,
+}
+
+/// Lowered stroke draw.
+#[derive(Clone, Debug)]
+pub(crate) struct PlanStroke {
+    /// Path geometry in local coordinates.
+    pub(crate) path: BezPath,
+    /// Geometry transform.
+    pub(crate) transform: Affine,
+    /// Stroke style.
+    pub(crate) stroke: Stroke,
+    /// Stroke brush.
+    pub(crate) brush: Brush,
+    /// Optional brush-space transform.
+    pub(crate) brush_transform: Option<Affine>,
+}

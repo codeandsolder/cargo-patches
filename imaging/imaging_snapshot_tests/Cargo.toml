@@ -1,0 +1,38 @@
+[package]
+name = "imaging_snapshot_tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Kompari-based snapshot tests for imaging backends."
+readme = "README.md"
+publish = false
+
+[dependencies]
+imaging = { features = ["std"], workspace = true }
+imaging_skia = { optional = true, workspace = true }
+imaging_tiny_skia = { optional = true, workspace = true }
+imaging_vello = { optional = true, workspace = true }
+imaging_vello_cpu = { optional = true, workspace = true }
+imaging_vello_hybrid = { optional = true, workspace = true }
+kurbo = { default-features = true, workspace = true }
+peniko = { default-features = true, workspace = true }
+skrifa = "0.49.0"
+svg_imaging = { workspace = true }
+wgpu = { default-features = true, optional = true, workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+kompari = { git = "https://github.com/linebender/kompari.git", rev = "4b851413e1b17307064aa48c50e59d7e29656543" }
+pollster = "0.4.0"
+
+[features]
+default = []
+vello_cpu = ["dep:imaging_vello_cpu"]
+skia = ["dep:imaging_skia"]
+tiny_skia = ["dep:imaging_tiny_skia"]
+vello_hybrid = ["dep:imaging_vello_hybrid", "dep:wgpu"]
+vello = ["dep:imaging_vello", "dep:wgpu"]

@@ -1,0 +1,62 @@
+[package]
+name = "imaging_skia"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Skia backend for the imaging command stream."
+readme = "README.md"
+keywords = ["graphics", "imaging", "rendering", "skia"]
+categories = ["graphics", "rendering"]
+
+[features]
+default = []
+gpu = [
+    "dep:imaging_wgpu",
+    "dep:wgpu",
+    "dep:ash",
+    "dep:windows",
+]
+
+[dependencies]
+imaging = { features = ["std"], workspace = true }
+imaging_wgpu = { default-features = false, optional = true, workspace = true }
+kurbo = { default-features = true, workspace = true }
+peniko = { default-features = true, workspace = true }
+skia-safe = { features = ["ganesh"], version = "0.153.3" }
+wgpu = { default-features = true, optional = true, workspace = true }
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+oaty = "0.1"
+skia-safe = { version = "0.153.3", features = ["metal"] }
+
+[target.'cfg(windows)'.dependencies]
+ash = { version = "0.38.0", optional = true }
+skia-safe = { version = "0.153.3", features = [
+    "d3d",
+    "vulkan",
+    # gl/svg/textlayout are enabled merely to match precompiled skia requirements
+    "gl",
+    "svg",
+    "textlayout",
+] }
+windows = { version = "0.62.0", optional = true, features = [
+    "Win32",
+    "Win32_Graphics",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+] }
+
+[target.'cfg(not(any(target_os = "macos", target_os = "ios", windows)))'.dependencies]
+ash = { version = "0.38.0", optional = true }
+skia-safe = { version = "0.153.3", features = ["vulkan"] }
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+default-target = "x86_64-unknown-linux-gnu"
+targets = []

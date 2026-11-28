@@ -1,0 +1,37 @@
+<!-- Instructions
+
+This changelog follows the patterns described here: <https://keepachangelog.com/en/>.
+
+Subheadings to categorize changes are `added, changed, deprecated, removed, fixed, security`.
+
+-->
+
+# Changelog
+
+The latest published `svg_imaging` release is [0.0.1](#001-2026-05-21), which was released on
+2026-05-21. You can find its changes [documented below](#001-2026-05-21).
+
+## [Unreleased]
+
+### Added
+
+- Lower SVG filter graphs with named inputs, per-primitive color spaces and regions, and
+  retained `feImage` scenes.
+- Lower ordered SVG filter chains of `feFlood`, `feOffset`, and sRGB `feGaussianBlur` and
+  `feDropShadow`, preserving filter regions and applying group clips, masks, and opacity
+  after filtering.
+
+### Changed
+
+- Updated the SVG parser to `usvg` 0.50, which preserves the SVG `lighter` composite operator in parsed filter trees. Applications that pass their own `usvg::Tree` or `usvg::Options` to `SvgDocument` should update their `usvg` dependency to 0.50.
+
+## [0.0.1][] (2026-05-21)
+
+This release has an [MSRV][] of 1.92.
+
+This is the initial release.
+
+[Unreleased]: https://github.com/forest-rs/imaging/compare/svg_imaging-v0.0.1...HEAD
+[0.0.1]: https://github.com/forest-rs/imaging/releases/tag/svg_imaging-v0.0.1
+
+[MSRV]: README.md#minimum-supported-rust-version-msrv
