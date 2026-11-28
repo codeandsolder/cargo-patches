@@ -121,13 +121,18 @@ try {
       }
       const validation = join(root, 'validation', family);
       if (existsSync(validation)) {
+        // A validation workspace must not enclose an imported workspace:
+        // Cargo otherwise resolves inherited member fields against the parent.
+        const validationRoot = packages.some(pkg => pkg.workspace_packages !== undefined)
+          ? join(scratch, 'validation-' + family) : staging;
+        mkdirSync(validationRoot, {recursive: true});
         for (const file of ['Cargo.toml', 'Cargo.lock']) {
-          const destination = join(staging, file);
+          const destination = join(validationRoot, file);
           if (existsSync(destination)) die('Validation workspace would overwrite imported content: ' + family);
           cpSync(join(validation, file), destination);
         }
         console.log(family + ': running checked family validation');
-        execFileSync('bash', [join(validation, 'test.sh')], {cwd: staging, stdio: 'inherit'});
+        execFileSync('bash', [join(validation, 'test.sh')], {cwd: validationRoot, stdio: 'inherit'});
       }
       continue;
     }
