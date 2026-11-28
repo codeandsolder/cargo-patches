@@ -1,0 +1,17 @@
+{
+  "family": "oar-image-features",
+  "packages": [
+    {
+      "name": "oar-ocr",
+      "version": "0.11.0",
+      "checksum": "bd048ac32b74560ee29ad643c7b7b4a62bdc8a8fe7fd360c2117edd680863866",
+      "patch": "patches/oar-ocr.patch"
+    },
+    {
+      "name": "oar-ocr-core",
+      "version": "0.11.0",
+      "checksum": "e0744c4a4795f98a00b7eda9022061bf3876d3a972a9d1a3cfbb5b8f64903a14",
+      "patch": "patches/oar-ocr-core.patch"
+    }
+  ]
+}
