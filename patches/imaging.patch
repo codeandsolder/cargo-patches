@@ -473,10 +473,10 @@ index 15b4cc8..86c9276 100644
          };
 diff --git a/imaging_vello_hybrid/tests/glyph_atlas.rs b/imaging_vello_hybrid/tests/glyph_atlas.rs
 new file mode 100644
-index 0000000..203eaa9
+index 0000000..466b4c6
 --- /dev/null
 +++ b/imaging_vello_hybrid/tests/glyph_atlas.rs
-@@ -0,0 +1,308 @@
+@@ -0,0 +1,317 @@
 +// Copyright 2026 the Imaging Authors
 +// SPDX-License-Identifier: Apache-2.0 OR MIT
 +
@@ -686,14 +686,23 @@ index 0000000..203eaa9
 +        assert!(after.hits > before.hits, "{name}");
 +        let retained = renderer.encode_scene(&half, 64, 64).unwrap();
 +        let direct = renderer.render(&retained, 64, 64).unwrap();
-+        for x in [9, 22] {
-+            let offset = (32 * 64 + x) * 4;
++        for (index, (cached, direct)) in faded
++            .data
++            .chunks_exact(4)
++            .zip(direct.data.chunks_exact(4))
++            .enumerate()
++        {
++            // Compare premultiplied values: tiny rounding near zero alpha can
++            // amplify harmless quantization when converted to straight RGBA.
++            let premul = |pixel: &[u8], channel: usize| {
++                (u16::from(pixel[channel]) * u16::from(pixel[3]) + 127) / 255
++            };
 +            assert!(
-+                faded.data[offset..offset + 4]
-+                    .iter()
-+                    .zip(&direct.data[offset..offset + 4])
-+                    .all(|(a, b)| a.abs_diff(*b) <= 2),
-+                "{name}: retained vs cached at {x}"
++                cached[3].abs_diff(direct[3]) <= 2
++                    && (0..3).all(|c| premul(cached, c).abs_diff(premul(direct, c)) <= 2),
++                "{name}: retained vs cached at ({}, {}): {cached:?} -> {direct:?}",
++                index % 64,
++                index / 64
 +            );
 +        }
 +        if name == "mask" {

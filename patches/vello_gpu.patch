@@ -348,7 +348,7 @@ index 758f24f..587a42c 100644
      ///
      /// For solid colors, this is a simple conversion. For gradients and images,
 diff --git a/src/text.rs b/src/text.rs
-index b1d190b..2b28c49 100644
+index b1d190b..bb41b1a 100644
 --- a/src/text.rs
 +++ b/src/text.rs
 @@ -52,7 +52,7 @@ impl GlyphAtlasResources {
@@ -360,3 +360,20 @@ index b1d190b..2b28c49 100644
          if self.glyph_resources.is_none() {
              let (atlas_width, atlas_height) = self.image_cache.atlas_manager().config().atlas_size;
              // TODO: Use a config optionally provided by the user!
+@@ -113,14 +113,11 @@ impl Resources {
+             render_to_atlas(backend, glyph_renderer, atlas_count, atlas_config, atlas_id)
+         })?;
+ 
+-        const PADDING: u16 = GLYPH_PADDING;
+-
+         if let Some(glyph_resources) = self.glyph_resources.as_mut() {
+             // TODO: An upload error drops all remaining pending uploads.
+             for upload in glyph_resources.glyph_atlas.drain_pending_uploads() {
+-                let resource = self.image_cache.get(upload.image_id).unwrap();
+-                let dst_x = resource.offset[0] + PADDING;
+-                let dst_y = resource.offset[1] + PADDING;
++                let dst_x = upload.atlas_slot.x;
++                let dst_y = upload.atlas_slot.y;
+                 upload_to_atlas(backend, &self.image_cache, &upload, dst_x, dst_y)?;
+             }
+         }
