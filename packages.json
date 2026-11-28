@@ -233,5 +233,13 @@
       "checksum": "1a98d30140e3296250832bbaaff83b27dcd6fa3cc70fb6f1f3e5c9c0023b5317",
       "patch": "patches/cgmath.patch"
     }
+  ],
+  "brush-parser": [
+    {
+      "name": "brush-parser",
+      "version": "0.4.0",
+      "checksum": "9f64b19efc02f0dd6cac1d462e20a1098f425f09cb13624efbb1b7d63f061735",
+      "patch": "patches/brush-parser.patch"
+    }
   ]
 }

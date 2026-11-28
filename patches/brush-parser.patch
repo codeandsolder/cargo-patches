@@ -1,0 +1,224 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 86ccd55..30b36ab 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -72,16 +72,12 @@ optional = true
+ [dependencies.bon]
+ version = "3.9.1"
+ 
+-[dependencies.cached]
+-version = "0.59.0"
++[dependencies.lru]
++version = "0.19.2"
+ 
+ [dependencies.indenter]
+ version = "0.3.4"
+ 
+-[dependencies.insta]
+-version = "1.47.1"
+-features = ["redactions"]
+-
+ [dependencies.miette]
+ version = "7.6.0"
+ features = ["derive"]
+diff --git a/Cargo.toml.orig b/Cargo.toml.orig
+index b31c466..295f692 100644
+--- a/Cargo.toml.orig
++++ b/Cargo.toml.orig
+@@ -27,9 +27,8 @@ winnow-parser = ["dep:winnow"]
+ [dependencies]
+ arbitrary = { version = "1.4.2", optional = true, features = ["derive"] }
+ bon = "3.9.1"
+-cached = "0.59.0"
++lru = "0.19.2"
+ indenter = "0.3.4"
+-insta = { version = "1.47.1", features = ["redactions"] }
+ miette = { version = "7.6.0", optional = true, default-features = false, features = [
+     "derive",
+ ] }
+diff --git a/src/arithmetic.rs b/src/arithmetic.rs
+index ffa0bd1..f1de0be 100644
+--- a/src/arithmetic.rs
++++ b/src/arithmetic.rs
+@@ -9,14 +9,13 @@ use crate::error;
+ ///
+ /// * `input` - The arithmetic expression to parse, in string form.
+ pub fn parse(input: &str) -> Result<ast::ArithmeticExpr, error::WordParseError> {
+-    cacheable_parse(input.to_owned())
+-}
+-
+-#[cached::proc_macro::cached(size = 64, result = true)]
+-fn cacheable_parse(input: String) -> Result<ast::ArithmeticExpr, error::WordParseError> {
+-    tracing::debug!(target: "arithmetic", "parsing arithmetic expression: '{input}'");
+-    arithmetic::full_expression(input.as_str())
+-        .map_err(|e| error::WordParseError::ArithmeticExpression(e.into()))
++    static CACHE: crate::cache::ParseCache<String, ast::ArithmeticExpr> =
++        std::sync::LazyLock::new(crate::cache::new);
++    crate::cache::parse(&CACHE, input.to_owned(), |input| {
++        tracing::debug!(target: "arithmetic", "parsing arithmetic expression: '{input}'");
++        arithmetic::full_expression(input.as_str())
++            .map_err(|e| error::WordParseError::ArithmeticExpression(e.into()))
++    })
+ }
+ 
+ peg::parser! {
+diff --git a/src/cache.rs b/src/cache.rs
+new file mode 100644
+index 0000000..2f8d0fc
+--- /dev/null
++++ b/src/cache.rs
+@@ -0,0 +1,75 @@
++//! Small shared success-only cache for parser entry points.
++use lru::LruCache;
++use std::{
++    hash::Hash,
++    num::NonZeroUsize,
++    sync::{LazyLock, Mutex, PoisonError},
++};
++
++pub(crate) type ParseCache<K, V> = LazyLock<Mutex<LruCache<K, V>>>;
++
++pub(crate) fn new<K: Hash + Eq, V>() -> Mutex<LruCache<K, V>> {
++    Mutex::new(LruCache::new(NonZeroUsize::new(64).unwrap()))
++}
++
++pub(crate) fn parse<K: Hash + Eq, V: Clone, E>(
++    cache: &ParseCache<K, V>,
++    key: K,
++    compute: impl FnOnce(&K) -> Result<V, E>,
++) -> Result<V, E> {
++    {
++        let mut entries = cache.lock().unwrap_or_else(PoisonError::into_inner);
++        if let Some(value) = entries.get(&key) {
++            return Ok(value.clone());
++        }
++    }
++    // Parsing can recursively invoke another parser. Do not retain the cache lock
++    // while computing the result, and do not cache failures.
++    let value = compute(&key)?;
++    cache
++        .lock()
++        .unwrap_or_else(PoisonError::into_inner)
++        .put(key, value.clone());
++    Ok(value)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::cell::Cell;
++
++    #[test]
++    fn caches_successes_not_errors_and_respects_lru_capacity() {
++        let cache: ParseCache<u32, u32> = LazyLock::new(new);
++        let calls = Cell::new(0);
++        let compute = |key: &u32| {
++            calls.set(calls.get() + 1);
++            if *key == 0 { Err(()) } else { Ok(*key) }
++        };
++        assert_eq!(parse(&cache, 0, compute), Err(()));
++        assert_eq!(parse(&cache, 0, compute), Err(()));
++        assert_eq!(parse(&cache, 1, compute), Ok(1));
++        assert_eq!(parse(&cache, 1, compute), Ok(1));
++        assert_eq!(calls.get(), 3);
++        for key in 2..=64 {
++            assert_eq!(parse(&cache, key, compute), Ok(key));
++        }
++        assert_eq!(parse(&cache, 1, compute), Ok(1)); // refresh recency
++        assert_eq!(parse(&cache, 65, compute), Ok(65));
++        let before = calls.get();
++        assert_eq!(parse(&cache, 1, compute), Ok(1));
++        assert_eq!(calls.get(), before);
++        assert_eq!(parse(&cache, 2, compute), Ok(2));
++        assert_eq!(calls.get(), before + 1);
++    }
++
++    #[test]
++    fn cache_does_not_hold_lock_while_computing() {
++        let cache: ParseCache<u32, u32> = LazyLock::new(new);
++        let value: Result<u32, ()> = parse(&cache, 1, |_| {
++            let inner = parse(&cache, 2, |_| Ok(2))?;
++            Ok(inner + 1)
++        });
++        assert_eq!(value, Ok(3));
++    }
++}
+diff --git a/src/lib.rs b/src/lib.rs
+index 1935e62..c8648bf 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -11,6 +11,7 @@ pub mod readline_binding;
+ pub mod test_command;
+ pub mod word;
+ 
++mod cache;
+ mod error;
+ mod parser;
+ mod source;
+diff --git a/src/tokenizer.rs b/src/tokenizer.rs
+index ceee9e3..c14d7d8 100644
+--- a/src/tokenizer.rs
++++ b/src/tokenizer.rs
+@@ -491,15 +491,13 @@ pub fn tokenize_str_with_options(
+     input: &str,
+     options: &TokenizerOptions,
+ ) -> Result<Vec<Token>, TokenizerError> {
+-    uncached_tokenize_string(input.to_owned(), options.to_owned())
+-}
+-
+-#[cached::proc_macro::cached(name = "TOKENIZE_CACHE", size = 64, result = true)]
+-fn uncached_tokenize_string(
+-    input: String,
+-    options: TokenizerOptions,
+-) -> Result<Vec<Token>, TokenizerError> {
+-    uncached_tokenize_str(input.as_str(), &options)
++    static CACHE: crate::cache::ParseCache<(String, TokenizerOptions), Vec<Token>> =
++        std::sync::LazyLock::new(crate::cache::new);
++    crate::cache::parse(
++        &CACHE,
++        (input.to_owned(), options.clone()),
++        |(input, options)| uncached_tokenize_str(input, options),
++    )
+ }
+ 
+ /// Break the given input shell script string into tokens, returning the tokens.
+diff --git a/src/word.rs b/src/word.rs
+index 6413cb4..ca75497 100644
+--- a/src/word.rs
++++ b/src/word.rs
+@@ -528,22 +528,19 @@ pub fn parse(
+     word: &str,
+     options: &ParserOptions,
+ ) -> Result<Vec<WordPieceWithSource>, error::WordParseError> {
+-    cacheable_parse(word.to_owned(), options.to_owned())
+-}
+-
+-#[cached::proc_macro::cached(size = 64, result = true)]
+-fn cacheable_parse(
+-    word: String,
+-    options: ParserOptions,
+-) -> Result<Vec<WordPieceWithSource>, error::WordParseError> {
+-    tracing::debug!(target: "expansion", "Parsing word '{}'", word);
+-
+-    let pieces = expansion_parser::unexpanded_word(word.as_str(), &options)
+-        .map_err(|err| error::WordParseError::Word(word.clone(), err.into()))?;
+-
+-    tracing::debug!(target: "expansion", "Parsed word '{}' => {{{:?}}}", word, pieces);
+-
+-    Ok(pieces)
++    static CACHE: crate::cache::ParseCache<(String, ParserOptions), Vec<WordPieceWithSource>> =
++        std::sync::LazyLock::new(crate::cache::new);
++    crate::cache::parse(
++        &CACHE,
++        (word.to_owned(), options.clone()),
++        |(word, options)| {
++            tracing::debug!(target: "expansion", "Parsing word '{}'", word);
++            let pieces = expansion_parser::unexpanded_word(word.as_str(), options)
++                .map_err(|err| error::WordParseError::Word(word.clone(), err.into()))?;
++            tracing::debug!(target: "expansion", "Parsed word '{}' => {{{:?}}}", word, pieces);
++            Ok(pieces)
++        },
++    )
+ }
+ 
+ /// Parse a heredoc body, treating `"` and `'` as literal characters.
