@@ -1,0 +1,17 @@
+{
+  "family": "ipmi-transports",
+  "packages": [
+    {
+      "name": "ipmi-rs-core",
+      "version": "0.6.0",
+      "checksum": "a2dd1b1e749c89affd95b9667995e19a8f16c6a72c668a484d47ce964770bc2d",
+      "patch": "patches/ipmi-rs-core.patch"
+    },
+    {
+      "name": "ipmi-rs",
+      "version": "0.6.0",
+      "checksum": "ff183b5b6e52153a6750a378a920f808b108ddf830c6411491c2b2e76ef6847e",
+      "patch": "patches/ipmi-rs.patch"
+    }
+  ]
+}
