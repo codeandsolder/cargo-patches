@@ -1,16 +1,139 @@
+diff --git a/imaging_vello_hybrid/Cargo.toml b/imaging_vello_hybrid/Cargo.toml
+index ca28621..a11bcaa 100644
+--- a/imaging_vello_hybrid/Cargo.toml
++++ b/imaging_vello_hybrid/Cargo.toml
+@@ -11,11 +11,12 @@ keywords = ["gpu", "graphics", "imaging", "rendering", "vello"]
+ categories = ["graphics", "rendering"]
+ 
+ [dependencies]
+-glifo.workspace = true
++glifo = { features = ["png"], workspace = true }
+ imaging = { features = ["std"], workspace = true }
+ imaging_wgpu = { default-features = false, workspace = true }
+ kurbo = { default-features = true, workspace = true }
+ peniko = { default-features = true, workspace = true }
++skrifa = "0.49.0"
+ vello_common = { default-features = true, workspace = true }
+ vello_gpu = { features = ["all_shader_features", "text", "wgpu"], workspace = true }
+ wgpu = { features = [
+diff --git a/imaging_vello_hybrid/src/image_registry.rs b/imaging_vello_hybrid/src/image_registry.rs
+index 29a3966..7f52af1 100644
+--- a/imaging_vello_hybrid/src/image_registry.rs
++++ b/imaging_vello_hybrid/src/image_registry.rs
+@@ -77,10 +77,19 @@ pub(crate) struct HybridImageUploadSession<'a> {
+ impl HybridImageUploadSession<'_> {
+     pub(crate) fn resolve_image(&mut self, data: &ImageData) -> Result<Arc<ImageTexture>, Error> {
+         let key = ImageKey::derive(data);
+-        if let Some((image, _)) = self.pending.iter().find(|(image, _)| image.key == key) {
++        if let Some((image, _)) = self
++            .pending
++            .iter()
++            .find(|(image, _)| image.key == Some(key))
++        {
+             return Ok(Arc::clone(&image.texture));
+         }
+-        if let Some(index) = self.registry.live.iter().position(|image| image.key == key) {
++        if let Some(index) = self
++            .registry
++            .live
++            .iter()
++            .position(|image| image.key == Some(key))
++        {
+             let image = self.registry.live.remove(index).unwrap();
+             let texture = Arc::clone(&image.texture);
+             self.registry.live.push_back(image);
+@@ -105,11 +114,42 @@ impl HybridImageUploadSession<'_> {
+         let ImageSource::Pixmap(pixmap) = ImageSource::from_peniko_image_data(data) else {
+             unreachable!("peniko image conversion always produces a pixmap");
+         };
++        self.queue_pixmap(pixmap, Some(key))
++    }
++
++    // Decoded font bitmaps have no persistent Blob identity. Deduplicate
++    // shared Arc instances within a recording; retain the resulting textures
++    // in the scene, without accumulating transient pixel buffers in the cache.
++    pub(crate) fn resolve_pixmap(
++        &mut self,
++        pixmap: &Arc<Pixmap>,
++    ) -> Result<Arc<ImageTexture>, Error> {
++        if let Some((image, _)) = self
++            .pending
++            .iter()
++            .find(|(_, pixels)| Arc::ptr_eq(pixels, pixmap))
++        {
++            return Ok(Arc::clone(&image.texture));
++        }
++        self.queue_pixmap(Arc::clone(pixmap), None)
++    }
++
++    fn queue_pixmap(
++        &mut self,
++        pixmap: Arc<Pixmap>,
++        key: Option<ImageKey>,
++    ) -> Result<Arc<ImageTexture>, Error> {
++        let width = u32::from(pixmap.width());
++        let height = u32::from(pixmap.height());
++        let limit = self.device.limits().max_texture_dimension_2d;
++        if width == 0 || height == 0 || width > limit || height > limit {
++            return Err(Error::UnsupportedImageBrush);
++        }
+         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+-            label: Some("imaging_vello_hybrid inline image"),
++            label: Some("imaging_vello_hybrid image"),
+             size: wgpu::Extent3d {
+-                width: data.width,
+-                height: data.height,
++                width,
++                height,
+                 depth_or_array_layers: 1,
+             },
+             mip_level_count: 1,
+@@ -127,7 +167,7 @@ impl HybridImageUploadSession<'_> {
+             RegisteredImage {
+                 key,
+                 texture: Arc::clone(&texture),
+-                bytes: u64::from(data.width) * u64::from(data.height) * 4,
++                bytes: u64::from(width) * u64::from(height) * 4,
+             },
+             pixmap,
+         ));
+@@ -151,8 +191,10 @@ impl HybridImageUploadSession<'_> {
+                 },
+                 texture.size(),
+             );
+-            self.registry.bytes_used += image.bytes;
+-            self.registry.live.push_back(image);
++            if image.key.is_some() {
++                self.registry.bytes_used += image.bytes;
++                self.registry.live.push_back(image);
++            }
+         }
+         self.queue.submit([]);
+     }
+@@ -160,7 +202,7 @@ impl HybridImageUploadSession<'_> {
+ 
+ #[derive(Debug)]
+ struct RegisteredImage {
+-    key: ImageKey,
++    key: Option<ImageKey>,
+     texture: Arc<ImageTexture>,
+     bytes: u64,
+ }
 diff --git a/imaging_vello_hybrid/src/lib.rs b/imaging_vello_hybrid/src/lib.rs
-index 36bc918..4b699a2 100644
+index 36bc918..edd9ae3 100644
 --- a/imaging_vello_hybrid/src/lib.rs
 +++ b/imaging_vello_hybrid/src/lib.rs
-@@ -242,6 +242,7 @@ use crate::wgpu_support::{
+@@ -242,6 +242,9 @@ use crate::wgpu_support::{
  
  pub use scene::VelloHybridScene;
  pub use scene_sink::VelloHybridSceneSink;
-+pub use vello_gpu::{GlyphAtlasStats, PrepareOutlineGlyphsError, PreparedOutlineGlyphs};
++pub use vello_gpu::{
++    GlyphAtlasStats, OutlineGlyphStyle, PrepareOutlineGlyphsError, PreparedOutlineGlyphs,
++};
  
  /// Errors that can occur when rendering via Vello hybrid.
  #[derive(Debug)]
-@@ -309,7 +310,7 @@ impl VelloHybridRendererState {
+@@ -309,7 +312,7 @@ impl VelloHybridRendererState {
      }
  
      fn new(device: wgpu::Device, queue: wgpu::Queue) -> Self {
@@ -19,7 +142,7 @@ index 36bc918..4b699a2 100644
              &device,
              &queue,
              &RenderTargetConfig {
-@@ -317,6 +318,13 @@ impl VelloHybridRendererState {
+@@ -317,6 +320,13 @@ impl VelloHybridRendererState {
                  width: 1,
                  height: 1,
              },
@@ -33,7 +156,7 @@ index 36bc918..4b699a2 100644
          );
  
          Self {
-@@ -396,6 +404,33 @@ impl VelloHybridRenderer {
+@@ -396,6 +406,31 @@ impl VelloHybridRenderer {
          }
      }
  
@@ -47,15 +170,13 @@ index 36bc918..4b699a2 100644
 +    pub fn prepare_outline_glyphs(
 +        &mut self,
 +        font: &peniko::FontData,
-+        font_size: f32,
-+        hint: bool,
++        style: OutlineGlyphStyle<'_>,
 +        glyph_ids: &[u32],
 +    ) -> Result<PreparedOutlineGlyphs, PrepareOutlineGlyphsError> {
 +        let result = self.state.renderer.prepare_outline_glyphs(
 +            &mut self.state.resources,
 +            font,
-+            font_size,
-+            hint,
++            style,
 +            glyph_ids,
 +        );
 +        if matches!(result, Err(PrepareOutlineGlyphsError::Render(_))) {
@@ -135,10 +256,18 @@ index 36bc918..4b699a2 100644
              u32::from(target_width),
              u32::from(target_height),
 diff --git a/imaging_vello_hybrid/src/scene_sink.rs b/imaging_vello_hybrid/src/scene_sink.rs
-index 15b4cc8..cf554bc 100644
+index 15b4cc8..86c9276 100644
 --- a/imaging_vello_hybrid/src/scene_sink.rs
 +++ b/imaging_vello_hybrid/src/scene_sink.rs
-@@ -28,6 +28,7 @@ pub struct VelloHybridSceneSink<'a> {
+@@ -15,6 +15,7 @@ use imaging::{
+ };
+ use kurbo::{Affine, Shape as _};
+ use peniko::{Brush, ImageBrush, Style};
++use skrifa::{FontRef, MetadataProvider, raw::TableProvider};
+ use std::sync::Arc;
+ use vello_common::TextureId;
+ use vello_common::filter_effects::{EdgeMode, Filter as VelloFilter, FilterPrimitive};
+@@ -28,6 +29,7 @@ pub struct VelloHybridSceneSink<'a> {
      images: &'a mut Vec<Arc<ImageTexture>>,
      scene_renderer: &'a mut Option<Arc<()>>,
      finished: bool,
@@ -146,7 +275,7 @@ index 15b4cc8..cf554bc 100644
      resources: SceneSinkResources<'a>,
      image_upload: Option<HybridImageUploadSession<'a>>,
      tolerance: f64,
-@@ -142,6 +143,7 @@ impl<'a> VelloHybridSceneSink<'a> {
+@@ -142,6 +144,7 @@ impl<'a> VelloHybridSceneSink<'a> {
              images: &mut scene.images,
              scene_renderer: &mut scene.renderer,
              finished: false,
@@ -154,7 +283,7 @@ index 15b4cc8..cf554bc 100644
              resources: SceneSinkResources::Owned(Box::default()),
              image_upload: None,
              tolerance: 0.1,
-@@ -177,6 +179,7 @@ impl<'a> VelloHybridSceneSink<'a> {
+@@ -177,6 +180,7 @@ impl<'a> VelloHybridSceneSink<'a> {
              images: &mut scene.images,
              scene_renderer: &mut scene.renderer,
              finished: false,
@@ -162,7 +291,7 @@ index 15b4cc8..cf554bc 100644
              resources: SceneSinkResources::Borrowed(&mut state.resources),
              image_upload: Some(image_upload),
              tolerance: 0.1,
-@@ -185,6 +188,11 @@ impl<'a> VelloHybridSceneSink<'a> {
+@@ -185,6 +189,11 @@ impl<'a> VelloHybridSceneSink<'a> {
          }
      }
  
@@ -174,7 +303,142 @@ index 15b4cc8..cf554bc 100644
      /// Set the tolerance used when converting rounded rectangles to paths.
      pub fn set_tolerance(&mut self, tolerance: f64) {
          self.tolerance = tolerance;
-@@ -359,6 +367,10 @@ impl<'a> VelloHybridSceneSink<'a> {
+@@ -200,7 +209,16 @@ impl<'a> VelloHybridSceneSink<'a> {
+         } else if !self.layer_stack.is_empty() {
+             Err(Error::Internal("unbalanced layer stack"))
+         } else {
+-            Ok(())
++            // Uncached bitmap glyphs own pixels until this upload pass.
++            let upload = &mut self.image_upload;
++            let images = &mut self.images;
++            self.scene.resolve_pixmap_images(|pixmap| {
++                let binding = upload
++                    .as_mut()
++                    .ok_or(Error::UnsupportedImageBrush)?
++                    .resolve_pixmap(pixmap)?;
++                Ok(Self::retain_texture_id(images, binding))
++            })
+         };
+ 
+         if result.is_err() {
+@@ -274,19 +292,22 @@ impl<'a> VelloHybridSceneSink<'a> {
+ 
+     fn retain_texture(&mut self, binding: Arc<ImageTexture>) -> ImageSource {
+         let may_have_transparency = binding.may_have_transparency;
+-        let index = self
+-            .images
++        let id = Self::retain_texture_id(self.images, binding);
++        ImageSource::external_texture(id, TextureRegion::Full, may_have_transparency)
++    }
++
++    fn retain_texture_id(
++        images: &mut Vec<Arc<ImageTexture>>,
++        binding: Arc<ImageTexture>,
++    ) -> TextureId {
++        let index = images
+             .iter()
+             .position(|held| Arc::ptr_eq(held, &binding))
+             .unwrap_or_else(|| {
+-                self.images.push(binding);
+-                self.images.len() - 1
++                images.push(binding);
++                images.len() - 1
+             });
+-        ImageSource::external_texture(
+-            TextureId(index as u64),
+-            TextureRegion::Full,
+-            may_have_transparency,
+-        )
++        TextureId(index as u64)
+     }
+ 
+     fn geometry_to_path(&self, geom: GeometryRef<'_>) -> kurbo::BezPath {
+@@ -331,24 +352,70 @@ impl<'a> VelloHybridSceneSink<'a> {
+             self.set_error_once(Error::UnsupportedGlyphBlend);
+             return;
+         }
+-        let Some(paint) = self.brush_to_paint(glyph_run.brush, glyph_run.composite) else {
+-            return;
+-        };
++        // Palette and bitmap color are independent of brush alpha. Isolate
++        // each glyph when composing a color-capable run with non-default
++        // alpha or blending; preserve overlap order and full-color cache data.
++        let isolate = glyph_run.composite != Composite::default()
++            && FontRef::from_index(glyph_run.font.data.as_ref(), glyph_run.font.index)
++                .is_ok_and(|font| font.colr().is_ok() || font.bitmap_strikes().format().is_some());
++        if isolate {
++            let Some(paint) = self.brush_to_paint(glyph_run.brush, Composite::default()) else {
++                return;
++            };
++            for glyph in glyphs {
++                self.scene.set_blend_mode(peniko::BlendMode::default());
++                self.scene.push_layer(
++                    None,
++                    Some(glyph_run.composite.blend),
++                    Some(glyph_run.composite.alpha),
++                    None,
++                    None,
++                );
++                self.draw_prepared_glyphs(
++                    &glyph_run,
++                    paint.clone(),
++                    peniko::BlendMode::default(),
++                    core::iter::once(VelloGlyph {
++                        id: glyph.id,
++                        x: glyph.x,
++                        y: glyph.y,
++                    }),
++                );
++                self.scene.pop_layer();
++            }
++        } else {
++            let Some(paint) = self.brush_to_paint(glyph_run.brush, glyph_run.composite) else {
++                return;
++            };
++            // Glifo requires a cloneable glyph source.
++            let glyphs = glyphs
++                .map(|glyph| VelloGlyph {
++                    id: glyph.id,
++                    x: glyph.x,
++                    y: glyph.y,
++                })
++                .collect::<Vec<_>>();
++            self.draw_prepared_glyphs(
++                &glyph_run,
++                paint,
++                glyph_run.composite.blend,
++                glyphs.into_iter(),
++            );
++        }
++    }
++
++    fn draw_prepared_glyphs(
++        &mut self,
++        glyph_run: &GlyphRunRef<'_>,
++        paint: PaintType,
++        blend: peniko::BlendMode,
++        glyphs: impl Iterator<Item = VelloGlyph> + Clone,
++    ) {
+         self.scene.set_transform(glyph_run.transform);
+         self.scene
+             .set_paint_transform(glyph_run.brush_transform.unwrap_or(Affine::IDENTITY));
+-        self.scene.set_blend_mode(glyph_run.composite.blend);
++        self.scene.set_blend_mode(blend);
+         self.scene.set_paint(paint);
+-        // TODO: Revisit this allocation. `PaintSink` currently gives us a
+-        // one-shot iterator, while glifo's glyph builders need a cloneable
+-        // glyph source.
+-        let glyphs = glyphs
+-            .map(|glyph| VelloGlyph {
+-                id: glyph.id,
+-                x: glyph.x,
+-                y: glyph.y,
+-            })
+-            .collect::<Vec<_>>();
+ 
+         match glyph_run.style {
+             Style::Fill(fill) => self.scene.set_fill_rule(*fill),
+@@ -359,6 +426,10 @@ impl<'a> VelloHybridSceneSink<'a> {
                  let builder = self
                      .scene
                      .glyph_run(resources, glyph_run.font)
@@ -185,19 +449,41 @@ index 15b4cc8..cf554bc 100644
                      .font_size(glyph_run.font_size)
                      .font_embolden(glifo::FontEmbolden::new(kurbo::Diagonal2::new(
                          glyph_run.font_embolden.x,
+@@ -372,8 +443,8 @@ impl<'a> VelloHybridSceneSink<'a> {
+                     builder
+                 };
+                 match glyph_run.style {
+-                    Style::Fill(_) => builder.fill_glyphs(glyphs.into_iter()),
+-                    Style::Stroke(_) => builder.stroke_glyphs(glyphs.into_iter()),
++                    Style::Fill(_) => builder.fill_glyphs(glyphs),
++                    Style::Stroke(_) => builder.stroke_glyphs(glyphs),
+                 }
+             }
+             SceneSinkResources::Owned(cache) => {
+@@ -399,8 +470,8 @@ impl<'a> VelloHybridSceneSink<'a> {
+                     builder
+                 };
+                 match glyph_run.style {
+-                    Style::Fill(_) => builder.fill_glyphs(glyphs.into_iter()),
+-                    Style::Stroke(_) => builder.stroke_glyphs(glyphs.into_iter()),
++                    Style::Fill(_) => builder.fill_glyphs(glyphs),
++                    Style::Stroke(_) => builder.stroke_glyphs(glyphs),
+                 }
+             }
+         };
 diff --git a/imaging_vello_hybrid/tests/glyph_atlas.rs b/imaging_vello_hybrid/tests/glyph_atlas.rs
 new file mode 100644
-index 0000000..5fe84cf
+index 0000000..466b4c6
 --- /dev/null
 +++ b/imaging_vello_hybrid/tests/glyph_atlas.rs
-@@ -0,0 +1,117 @@
+@@ -0,0 +1,317 @@
 +// Copyright 2026 the Imaging Authors
 +// SPDX-License-Identifier: Apache-2.0 OR MIT
 +
 +//! GPU regression for the immediate-frame glyph atlas.
 +
 +use imaging::{Painter, record::Scene, render::ImageRenderer};
-+use imaging_vello_hybrid::{VelloHybridRenderer, wgpu};
++use imaging_vello_hybrid::{OutlineGlyphStyle, VelloHybridRenderer, wgpu};
 +use peniko::{Blob, Color};
 +use std::sync::Arc;
 +
@@ -289,7 +575,15 @@ index 0000000..5fe84cf
 +
 +    // A public retained scene contains no evictable atlas references.
 +    let leased = renderer
-+        .prepare_outline_glyphs(&font, 24.0, false, &[36])
++        .prepare_outline_glyphs(
++            &font,
++            OutlineGlyphStyle {
++                font_size: 24.0,
++                hint: false,
++                normalized_coords: &[],
++            },
++            &[36],
++        )
 +        .unwrap();
 +    let slot = leased.slots().next().unwrap();
 +    assert!(slot.width > 0 && slot.height > 0);
@@ -308,3 +602,312 @@ index 0000000..5fe84cf
 +    let after = renderer.render(&retained, 64, 64).unwrap();
 +    assert_eq!(before.data, after.data);
 +}
++
++#[test]
++fn color_and_bitmap_glyphs_preserve_color_coverage_and_opacity() {
++    let (device, queue) = pollster::block_on(async {
++        let adapter = wgpu::Instance::default()
++            .request_adapter(&wgpu::RequestAdapterOptions::default())
++            .await
++            .expect("GPU required for atlas validation");
++        adapter
++            .request_device(&wgpu::DeviceDescriptor::default())
++            .await
++            .unwrap()
++    });
++    let mut renderer = VelloHybridRenderer::new(device, queue);
++    for (name, bytes) in [
++        (
++            "COLR",
++            include_bytes!("../../test_assets/fonts/AtlasCOLR.ttf").as_slice(),
++        ),
++        (
++            "PNG",
++            include_bytes!("../../test_assets/fonts/AtlasPNG.ttf").as_slice(),
++        ),
++        (
++            "BGRA",
++            include_bytes!("../../test_assets/fonts/AtlasBGRA.ttf").as_slice(),
++        ),
++        (
++            "mask",
++            include_bytes!("../../test_assets/fonts/AtlasMask.ttf").as_slice(),
++        ),
++    ] {
++        let font = peniko::FontData::new(Blob::new(Arc::new(bytes)), 0);
++        let make_scene = |alpha, brush: &peniko::Brush| {
++            let mut scene = Scene::new();
++            Painter::new(&mut scene)
++                .glyphs(&font, brush)
++                .font_size(16.0)
++                .transform(kurbo::Affine::translate((8.0, 40.0)))
++                .composite(imaging::Composite {
++                    alpha,
++                    ..Default::default()
++                })
++                .draw(
++                    &peniko::Style::Fill(peniko::Fill::NonZero),
++                    [imaging::record::Glyph {
++                        id: 1,
++                        x: 0.0,
++                        y: 0.0,
++                    }],
++                );
++            scene
++        };
++        let blue = peniko::Brush::Solid(Color::from_rgb8(0, 0, 255));
++        let full = make_scene(1.0, &blue);
++        let image = ImageRenderer::render_source(&mut renderer, &mut &full, 64, 64)
++            .unwrap_or_else(|e| panic!("{name}: {e}"));
++        let pixel = |x: usize, y: usize| &image.data[(y * 64 + x) * 4..(y * 64 + x) * 4 + 4];
++        let left = pixel(9, 32);
++        let right = pixel(22, 32);
++        if name == "mask" {
++            assert!(left[2] > 240 && left[3] > 240, "{name}: {left:?}");
++            assert!(right[2] > 240 && right[3] > 240, "{name}: {right:?}");
++        } else {
++            assert!(left[0] > 240 && left[3] > 240, "{name}: {left:?}");
++            assert!(right[1] > 240 && right[3] > 100, "{name}: {right:?}");
++        }
++        let before = renderer.glyph_atlas_stats().unwrap();
++        let half = make_scene(0.5, &blue);
++        let faded = ImageRenderer::render_source(&mut renderer, &mut &half, 64, 64).unwrap();
++        for (a, b) in image.data.chunks_exact(4).zip(faded.data.chunks_exact(4)) {
++            assert!(
++                u16::from(a[3]).abs_diff(2 * u16::from(b[3])) <= 2,
++                "{name}: {a:?} -> {b:?}"
++            );
++        }
++        let after = renderer.glyph_atlas_stats().unwrap();
++        assert_eq!(
++            before.entries, after.entries,
++            "opacity is not atlas content: {name}"
++        );
++        assert!(after.hits > before.hits, "{name}");
++        let retained = renderer.encode_scene(&half, 64, 64).unwrap();
++        let direct = renderer.render(&retained, 64, 64).unwrap();
++        for (index, (cached, direct)) in faded
++            .data
++            .chunks_exact(4)
++            .zip(direct.data.chunks_exact(4))
++            .enumerate()
++        {
++            // Compare premultiplied values: tiny rounding near zero alpha can
++            // amplify harmless quantization when converted to straight RGBA.
++            let premul = |pixel: &[u8], channel: usize| {
++                (u16::from(pixel[channel]) * u16::from(pixel[3]) + 127) / 255
++            };
++            assert!(
++                cached[3].abs_diff(direct[3]) <= 2
++                    && (0..3).all(|c| premul(cached, c).abs_diff(premul(direct, c)) <= 2),
++                "{name}: retained vs cached at ({}, {}): {cached:?} -> {direct:?}",
++                index % 64,
++                index / 64
++            );
++        }
++        if name == "mask" {
++            let gradient = peniko::Brush::Gradient(
++                peniko::Gradient::new_linear((0.0, 0.0), (16.0, 0.0))
++                    .with_stops([Color::from_rgb8(255, 0, 0), Color::from_rgb8(0, 255, 0)]),
++            );
++            let scene = make_scene(1.0, &gradient);
++            let colored = ImageRenderer::render_source(&mut renderer, &mut &scene, 64, 64).unwrap();
++            let left = &colored.data[(32 * 64 + 9) * 4..(32 * 64 + 9) * 4 + 4];
++            let right = &colored.data[(32 * 64 + 22) * 4..(32 * 64 + 22) * 4 + 4];
++            assert!(
++                left[0] > left[1] && left[3] > 240,
++                "gradient mask: {left:?}"
++            );
++            assert!(
++                right[1] > right[0] && right[3] > 240,
++                "gradient mask: {right:?}"
++            );
++            assert!(
++                colored.data[(32 * 64 + 18) * 4 + 3] < 64,
++                "mask hole must remain transparent"
++            );
++        }
++    }
++}
++
++#[test]
++fn prewarm_matches_variable_instances_and_canonical_defaults() {
++    let (device, queue) = pollster::block_on(async {
++        let adapter = wgpu::Instance::default()
++            .request_adapter(&Default::default())
++            .await
++            .expect("GPU required for atlas validation");
++        adapter.request_device(&Default::default()).await.unwrap()
++    });
++    let mut renderer = VelloHybridRenderer::new(device, queue);
++    let font = peniko::FontData::new(
++        Blob::new(Arc::new(include_bytes!(
++            "../../test_assets/fonts/AtlasVariable.ttf"
++        ))),
++        0,
++    );
++    let mut scene = Scene::new();
++    Painter::new(&mut scene)
++        .glyphs(&font, Color::BLACK)
++        .font_size(32.0)
++        .normalized_coords(&[0])
++        .hint(false)
++        .transform(kurbo::Affine::translate((8.0, 40.0)))
++        .draw(
++            &peniko::Style::Fill(peniko::Fill::NonZero),
++            [imaging::record::Glyph {
++                id: 1,
++                x: 0.0,
++                y: 0.0,
++            }],
++        );
++    ImageRenderer::render_source(&mut renderer, &mut &scene, 64, 64).unwrap();
++    let before = renderer.glyph_atlas_stats().unwrap();
++    let normal = renderer
++        .prepare_outline_glyphs(
++            &font,
++            OutlineGlyphStyle {
++                font_size: 32.0,
++                hint: false,
++                normalized_coords: &[],
++            },
++            &[1],
++        )
++        .unwrap();
++    let after = renderer.glyph_atlas_stats().unwrap();
++    assert_eq!(before.entries, after.entries);
++    assert!(after.hits > before.hits);
++    let bold = renderer
++        .prepare_outline_glyphs(
++            &font,
++            OutlineGlyphStyle {
++                font_size: 32.0,
++                hint: false,
++                normalized_coords: &[16384],
++            },
++            &[1],
++        )
++        .unwrap();
++    assert!(bold.slots().next().unwrap().width > normal.slots().next().unwrap().width);
++    assert_eq!(
++        renderer.glyph_atlas_stats().unwrap().entries,
++        after.entries + 1
++    );
++}
+diff --git a/test_assets/fonts/Atlas-fixtures.md b/test_assets/fonts/Atlas-fixtures.md
+new file mode 100644
+index 0000000..92586d0
+--- /dev/null
++++ b/test_assets/fonts/Atlas-fixtures.md
+@@ -0,0 +1,11 @@
++# Synthetic glyph-atlas regression fixtures
++
++These small test fonts are original geometric fixtures, provided under the same Apache-2.0 OR MIT terms as Imaging. They contain no third-party font outlines or images. Glyph ID 1 is mapped to U+E000 in each.
++
++- AtlasCOLR: 1024 units/em, two adjacent solid red/green COLRv0 rectangles, height 768 units.
++- AtlasPNG: SBIX 16 ppem RGBA PNG strike, red left half and green right half.
++- AtlasMask: EBDT/EBLC 4 ppem, row-aligned 4-bit coverage strike with each row [15,8,0,15].
++
++- AtlasBGRA: CBDT/CBLC 4 ppem, raw premultiplied BGRA, opaque red left half and half-alpha green right half.
++
++- AtlasVariable: synthetic weight axis (400 to 900), glyph 1 ink width 512 to 896 units and corresponding variable advance.
+diff --git a/test_assets/fonts/AtlasBGRA.ttf b/test_assets/fonts/AtlasBGRA.ttf
+new file mode 100644
+index 0000000000000000000000000000000000000000..dc2a4cb0677ac82f39a0e26a28bd866bcc2650b1
+GIT binary patch
+literal 872
+zcmZQzWME+6VQ64rW^izJatUGJX8*&$z;uRzfx*++$;X+6OJO+!1G5AJ14Dp+u)dMX
+z4>KPI21XAC28M*>+{6L~o(I7U42&BX7#K{_b1Ksqz<}`$0|NtNMrvY8c;dnz3=9k)
+z^UN|bQWKfmnA;c_7+Dw?7*sNHODaGN1_s6z3=9lxIr+(nVC@WyPeA<K#EJq2W(Fn(
+z21X4A1_p(^#N5=n+0Duf42&Nb7#P+S<QJC|6qQ_MU|?Fnz`&pb_6s8egTWiGY4Q9v
+zUm2Jorq`%$XaJcDqd{y228hXEHX{QAbIbo01_p?FklVrH2!au8HWOR`!GZ}fvoJ7D
+zU|>ZU0h7Q+3m^&F+uPeSFg##*0CfX%3quW(G>EBy<T3_OcrY+CFffQPFoRts!ob3y
+zzyMOh0^&bl`2Qbd-v9p!5LbgtK*n4Qbs%+MUvh#;kSr4eI|C<FoS6Y3&Vs~d1GAYK
+z7+F9ng%|`tE@0tgU}E57P=d0V84%(uNNhF`+p#1kvDnEy$T282y)-AWh{2Jegdv9^
+zk)fEuiNT#Ah{2H|h#{3BouL#gTEqbHEy#ViFer5}u_ou|<QIWLg@uKIg@pke1pogt
+tG(aKAd{F8D*$B!V77Ppwp!5%7gT%07Mg~R}7I27z)NwFC!XB2OTmks6XMO+x
+
+literal 0
+HcmV?d00001
+
+diff --git a/test_assets/fonts/AtlasCOLR.ttf b/test_assets/fonts/AtlasCOLR.ttf
+new file mode 100644
+index 0000000000000000000000000000000000000000..7bc779b86d7800179725ca626e1e8fb8edb2bcc7
+GIT binary patch
+literal 840
+zcmZQzWME+6VQ64rW^i!!_X%QPXHaKgU>0FuV32VRaP(pL&nU>iz-++4z#!%ytZ$_9
+z!_0?)fzgA3fgvF|H?e?$=Rq(71LGD31_qP#oXRw9*LV*G2F5Q83=BpYsfj7k@k@R%
+zFfg29U|=xI$Vg3OZDVa?U|?inU|>+m$StX0V*mlh6$}gvTsis4i42kqJPZtsFF^d<
+z#EJq2HU>5Z21X4A1_p(^#N5=j2~%tt7??o(bp`pwC4oT)moqRh-C$r~um<~uk%8e~
+zo48Cozs*;OH4F?jsv8<Ww!ml>24)bKnSlvJF))DiF}M70VPF6`iwPtQ3Kgg%m|_H}
+zVPIik0n-d1C17y`!OX(IIDvr`Yy?6S2TK4++}_^ao`K;3!vhA08<<-dYLKKsOa+L`
+zKuoBUK@`XnA`Hx67l|;iFeos9l!0CNfZ_jtkeUDgD?nTh(h9;n43ZH4g1o@Y01600
+zML|U-hJPR?Bgj~A=rA)dD1ybIG9bNN40T|;K;gv+GlhYPft`U9D$dM+5NAPRvw_*n
+z42&!wl|l>xAXl?+GB7dlF(^UV%nS%|79=(si0xRClUNK&o<XVUr8$X342}#X3^@#m
+z48;u24E_v03_%P*45<w145eVvA_kE6KyJp3Sr`}?nHZTFSy+?vbMlK=a#GVuSc@{#
+oGfF^uK=IGVz`!8Fzy$UiI8lIH3O1P$9RDDBP&of*_|L!q0E@+0ga7~l
+
+literal 0
+HcmV?d00001
+
+diff --git a/test_assets/fonts/AtlasMask.ttf b/test_assets/fonts/AtlasMask.ttf
+new file mode 100644
+index 0000000000000000000000000000000000000000..a5caa8f7917bbc3998f39f06c9e7bf963c70742b
+GIT binary patch
+literal 816
+zcmZQzWME+6VQ64rW^izIatTrYCjW(jf$0nb1B0NelaDhCCrds91JeTr28ICtV0|N%
+zA7(xb42&KO3=9d$xrqe~JP(2y7#KG&Fff>;=TxRKfC1wh1_lPkjMT)G@Wh2b7#J8p
+z=9y(=q$V=AF}E==FtRW(FsNkYmQ;Wk3=E7b7#JAXa`KZC!P*%ZpMdzei4_G5%nVEn
+z42&8K3=9f+iMgpWUaT!*U|{^fz`(GsAiubzps3_30|V0n1_lNluwNJ%7*^E&dlAoX
+z^Ob=aVtS40h6a$iFdD>WV1SqmW-~G{Ft_|~VPJr$2e}<AjvyGpW;4MB5G<GwGYbRb
+z1O`@w5ikjCv;dNzy}i9X1H%J`2T(UKw=mQoNrRXQNG@Xlg$DyO0|SEy12foFA`C1H
+z3Jf46EFk^^hX4OT=KcS#0C6?Q1Z2#`PzO>6_9Z8n1j#ZnurqK%#hDop;w(sPHZYr+
+zfsqBIQiwqS<N_8>1||kR1|=w)nE@frg2ZM6u^mft5{rEki?f4L(@S#_ix?akN*Hn&
+z5*dmae8FTkLl8qMLpnn#ShR=%;#-jWaA8pDU}8<q&&e+Wg$xS|0}IO!eh38Vfy5Lj
+km0K_{Fi61t3zEZz85tN^SXe+I2hzjA0Ahi{7NV9H0Mh?gg8%>k
+
+literal 0
+HcmV?d00001
+
+diff --git a/test_assets/fonts/AtlasPNG.ttf b/test_assets/fonts/AtlasPNG.ttf
+new file mode 100644
+index 0000000000000000000000000000000000000000..3b882f596a36bbfc7e27c60c5766a1693d453e94
+GIT binary patch
+literal 816
+zcmZQzWME+6W@unwW-#y%);Ci5VdlfYz-Yn1z>tufn^?fW^B|akfpGx?1A|F=PGuSc
+z7%<*pU|?X(NKH%$Ph9wefq`KU0|SFuMn-BPa~pFT0|Ubs1_lO|jNFn67Kr*83=9lx
+zIr+(nU@imW6%ao+v7&&1nSqIcfl-2ifk7cJF*nslz1NF@f$;$Y1H<Zq{Nj>=qLQl&
+z3`{)?3=BHONtqS<-9uh5Ffi?4U|=W*yPc7NA!stkqj-LsuMEr(+iFxdG=S`Z(I7Sh
+z1H>jUn~{Nmx#fQg0|P`o$S+`V1i=V4n+Yy}V8Mi#Sr`~6Ft8$wfJtDZ1&{>o?d|Ou
+z7#=V@fVzRXg`oyX8pKpUav1|Cd>EJ+7#Kttn8B_RVPIiUU;rs$0r4L&{QnO!@Be=V
+zh^s*+AY(3uI*>ZBFFC*@NS29#oq+=?&dh)iXF+1Kf!WLqj4YfCj0^${{2&*wa56A4
+z@G;0k+001dEJ$oN5ZkdNC$Tud&pjwLy)-AWh{2Jegdv9^k)fC&fWeQ!ogs)Jl_8y>
+z6f9N*@hQk{xG*TCFtH}*=j0bLK>P|yy*vy83?2*&44^;;;cSrhg1mHv&Hz7mUM?vv
+z1_lORPY;(Mm>Lc?1_lQC&;LP*QOeWBF{ENn@{jWeKFG_fG4)9qWF1(+c=#{_!$#A8
+V0&CabuL2q8>FVdQ&MBdZ0RYu%XM6wv
+
+literal 0
+HcmV?d00001
+
+diff --git a/test_assets/fonts/AtlasVariable.ttf b/test_assets/fonts/AtlasVariable.ttf
+new file mode 100644
+index 0000000000000000000000000000000000000000..55fa58fece4ccea25cf24f91d60963cbbcde5541
+GIT binary patch
+literal 988
+zcmZQzWME+6V`yMtW=QY|a}08v;GoaIz-+?6z+mPdtZ$_9!_0?)fiZ)DfgvF{#4)6z
+zAftzYfjNhPfk7rYH?e?$=Rq(71LFk-1_qO~vc#e~+001{49p!23=AsiIhAQbN){>%
+z3`{%>3=9(KWr;;>a~lsbFfgxSU|=xFNKH(MOkDDVfq~%-$i9q>)I`=c=Hm<uj4B}g
+z8M!4DYz_<z3=E7X7#J8ha`KZC89*j6FtIQ&FtFt&RunL>Ft9N&FnTaBFev0D=B8!_
+zTvuRVU;^oXQjlL<QczTKm4ShogMooT2kciy28K(HQ-8+u+k9nU1{uS^P@}q`0b~n|
+zW@2ClahVyIKorP&1_tJq|1As*VD%163}BO>l3<DnEW*UV0;U<@I>C})f|-SZaRLJ?
+z#0anm9zp;~&febMo`K;3!vm-rm|GZXkfcFO1&GU-z+nZp8{`2I24=8pL>O2Y6c|8C
+zz^;41@c%!^y#N0d7{T%&6BxkZ3Q7wMVBa${Fc>NdDl#$rgM<YS!!)Q`Mh0F;h%kVB
+z$<DwF6=y~gXF+1KA=r!z3~UTwSFvz1FfvFnNP%3)!pXqIz{g+$Wium*vmmkA5Nt+}
+zYn>cRauSQf5{ohulX6mnQqxOw5{tr9Gt)Cl7#tZ&7;+dA8HyRg7!nzZ7%~|W8Il-s
+z7*ZL67*ZM18A`#jMGWB#sSKG6=?obRCE!qlgamdH6zNQ?$@w|?MNl7$peO`|9S>MW
+zi~$_34h#;U5CXFq7#Kk*48-ODtAXidDo@WS0ciz`3NV1u5lD^$EIxq&lx7&1TR=83
+oLQ)-AF@qG;y;2|<2JQw%1}+Bn1_lQPW+nzE<_1T`2F8Xa08rs>asU7T
+
+literal 0
+HcmV?d00001
+

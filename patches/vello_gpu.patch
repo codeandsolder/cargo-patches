@@ -1,5 +1,5 @@
 diff --git a/src/lib.rs b/src/lib.rs
-index 7b31fcd..ee8d99f 100644
+index 7b31fcd..dbd1078 100644
 --- a/src/lib.rs
 +++ b/src/lib.rs
 @@ -133,6 +133,8 @@ pub use render::{
@@ -7,7 +7,7 @@ index 7b31fcd..ee8d99f 100644
      WebGlShaderProgramOperation, WebGlShaderStage, WebGlTextureBindings, WebGlTextureTarget,
  };
 +#[cfg(all(feature = "wgpu", feature = "text", feature = "full_image_support"))]
-+pub use render::{PrepareOutlineGlyphsError, PreparedOutlineGlyphs};
++pub use render::{OutlineGlyphStyle, PrepareOutlineGlyphsError, PreparedOutlineGlyphs};
  #[cfg(feature = "wgpu")]
  pub use render::{
      RenderOptions, RenderTarget, RenderTargetConfig, Renderer, TextureBinding, TextureBindings,
@@ -20,8 +20,33 @@ index 7b31fcd..ee8d99f 100644
  pub use resources::Resources;
  pub use scene::{LayersConfig, MemorySettings, RenderSettings, Scene};
  #[cfg(feature = "text")]
+@@ -177,6 +181,9 @@ pub enum RenderError {
+     /// A glyph paint referenced an atlas entry that does not exist.
+     #[error("Missing atlas entry for {0:?}")]
+     MissingAtlasEntry(ImageId),
++    /// An owned CPU bitmap was not uploaded before GPU rendering.
++    #[error("CPU bitmap paint must be resolved to a GPU texture before rendering")]
++    UnresolvedPixmap,
+     /// An intermediate texture allocation failed.
+     #[error(transparent)]
+     IntermediateTexture(#[from] IntermediateTextureError),
+diff --git a/src/render/common/scene_preparer.rs b/src/render/common/scene_preparer.rs
+index d261674..f92e8a4 100644
+--- a/src/render/common/scene_preparer.rs
++++ b/src/render/common/scene_preparer.rs
+@@ -133,9 +133,7 @@ impl ScenePreparer {
+                     ImageSource::ExternalTexture {
+                         id, source_region, ..
+                     } => encode_external_texture(*id, img, *source_region)?,
+-                    ImageSource::Pixmap(_) => {
+-                        panic!("pixmap image sources are not supported by Vello GPU")
+-                    }
++                    ImageSource::Pixmap(_) => return Err(RenderError::UnresolvedPixmap),
+                 },
+                 EncodedPaint::Gradient(gradient) => {
+                     let (gradient_start, gradient_width) =
 diff --git a/src/render/mod.rs b/src/render/mod.rs
-index 023f9b9..a3d667b 100644
+index 023f9b9..7f6570f 100644
 --- a/src/render/mod.rs
 +++ b/src/render/mod.rs
 @@ -29,6 +29,8 @@ pub use webgl::{
@@ -29,18 +54,30 @@ index 023f9b9..a3d667b 100644
      probe::{WebGlPendingProbe, WebGlProbeError, WebGlProbeStatus},
  };
 +#[cfg(all(feature = "wgpu", feature = "text", feature = "full_image_support"))]
-+pub use wgpu::{PrepareOutlineGlyphsError, PreparedOutlineGlyphs};
++pub use wgpu::{OutlineGlyphStyle, PrepareOutlineGlyphsError, PreparedOutlineGlyphs};
  #[cfg(feature = "wgpu")]
  pub use wgpu::{
      RenderOptions, RenderTarget, RenderTargetConfig, Renderer, TextureBinding, TextureBindings,
 diff --git a/src/render/wgpu/mod.rs b/src/render/wgpu/mod.rs
-index d8b3233..26ec2a7 100644
+index d8b3233..ebffa4b 100644
 --- a/src/render/wgpu/mod.rs
 +++ b/src/render/wgpu/mod.rs
-@@ -132,6 +132,43 @@ pub struct Renderer {
+@@ -132,6 +132,55 @@ pub struct Renderer {
      atlas_clear_scratch: Vec<u8>,
  }
  
++/// Font rasterization settings shared by ordinary glyph runs and retained consumers.
++#[cfg(all(feature = "text", feature = "full_image_support"))]
++#[derive(Clone, Copy, Debug)]
++pub struct OutlineGlyphStyle<'a> {
++    /// Physical pixels per em.
++    pub font_size: f32,
++    /// Vertical hinting policy.
++    pub hint: bool,
++    /// Signed F2Dot14 normalized variation coordinates in font-axis order.
++    pub normalized_coords: &'a [i16],
++}
++
 +/// Stable monochrome atlas slots and their GPU texture views.
 +#[cfg(all(feature = "text", feature = "full_image_support"))]
 +#[derive(Clone, Debug)]
@@ -81,7 +118,7 @@ index d8b3233..26ec2a7 100644
  impl Renderer {
      /// Creates a new renderer and its persistent resources.
      pub fn new(
-@@ -263,30 +300,7 @@ impl Renderer {
+@@ -263,30 +312,7 @@ impl Renderer {
          options: RenderOptions<'_>,
      ) -> Result<(), RenderError> {
          #[cfg(feature = "text")]
@@ -113,7 +150,7 @@ index d8b3233..26ec2a7 100644
  
          let result = self.render_scene(
              scene,
-@@ -310,6 +324,114 @@ impl Renderer {
+@@ -310,6 +336,120 @@ impl Renderer {
          result
      }
  
@@ -158,11 +195,16 @@ index d8b3233..26ec2a7 100644
 +        &mut self,
 +        resources: &mut Resources,
 +        font: &crate::peniko::FontData,
-+        font_size: f32,
-+        hint: bool,
++        style: OutlineGlyphStyle<'_>,
 +        glyph_ids: &[u32],
 +    ) -> Result<PreparedOutlineGlyphs, PrepareOutlineGlyphsError> {
-+        if !font_size.is_finite() || font_size <= 0.0 {
++        if !style.font_size.is_finite()
++            || style.font_size <= 0.0
++            || style
++                .normalized_coords
++                .iter()
++                .any(|&c| !(-16384..=16384).contains(&c))
++        {
 +            return Err(PrepareOutlineGlyphsError::Unavailable);
 +        }
 +        resources.ensure_glyph_resources();
@@ -176,8 +218,9 @@ index d8b3233..26ec2a7 100644
 +        scene.set_paint(crate::peniko::color::palette::css::BLACK);
 +        let result = scene
 +            .glyph_run(resources, font)
-+            .font_size(font_size)
-+            .hint(hint)
++            .font_size(style.font_size)
++            .hint(style.hint)
++            .normalized_coords(style.normalized_coords)
 +            .atlas_cache(true)
 +            .fill_glyphs(
 +                glyph_ids
@@ -266,8 +309,46 @@ index f48cbe2..c8abeb9 100644
      pub(crate) fn new(glyph_atlas_config: AtlasConfig) -> Self {
          Self {
              image_cache: ImageCache::new_with_config(glyph_atlas_config),
+diff --git a/src/scene.rs b/src/scene.rs
+index 758f24f..587a42c 100644
+--- a/src/scene.rs
++++ b/src/scene.rs
+@@ -320,6 +320,33 @@ impl Scene {
+             .effective_paint_transform(self.transforms())
+     }
+ 
++    /// Replace owned CPU bitmap paints with externally uploaded textures.
++    /// Existing texture and atlas paints are unchanged. The caller must retain
++    /// the returned texture identities for the lifetime of the scene.
++    /// # Errors
++    /// Returns an error from the upload callback; discard the scene on failure.
++    pub fn resolve_pixmap_images<E>(
++        &mut self,
++        mut upload: impl FnMut(
++            &alloc::sync::Arc<vello_common::pixmap::Pixmap>,
++        ) -> Result<vello_common::TextureId, E>,
++    ) -> Result<(), E> {
++        use vello_common::paint::{ImageSource, TextureRegion};
++        for paint in &mut self.encoded_paints {
++            if let EncodedPaint::Image(image) = paint
++                && let ImageSource::Pixmap(pixmap) = &image.source
++            {
++                let id = upload(pixmap)?;
++                image.source = ImageSource::external_texture(
++                    id,
++                    TextureRegion::Full,
++                    pixmap.may_have_transparency(),
++                );
++            }
++        }
++        Ok(())
++    }
++
+     /// Encode the current paint into a `Paint` that can be used for rendering.
+     ///
+     /// For solid colors, this is a simple conversion. For gradients and images,
 diff --git a/src/text.rs b/src/text.rs
-index b1d190b..2b28c49 100644
+index b1d190b..bb41b1a 100644
 --- a/src/text.rs
 +++ b/src/text.rs
 @@ -52,7 +52,7 @@ impl GlyphAtlasResources {
@@ -279,3 +360,20 @@ index b1d190b..2b28c49 100644
          if self.glyph_resources.is_none() {
              let (atlas_width, atlas_height) = self.image_cache.atlas_manager().config().atlas_size;
              // TODO: Use a config optionally provided by the user!
+@@ -113,14 +113,11 @@ impl Resources {
+             render_to_atlas(backend, glyph_renderer, atlas_count, atlas_config, atlas_id)
+         })?;
+ 
+-        const PADDING: u16 = GLYPH_PADDING;
+-
+         if let Some(glyph_resources) = self.glyph_resources.as_mut() {
+             // TODO: An upload error drops all remaining pending uploads.
+             for upload in glyph_resources.glyph_atlas.drain_pending_uploads() {
+-                let resource = self.image_cache.get(upload.image_id).unwrap();
+-                let dst_x = resource.offset[0] + PADDING;
+-                let dst_y = resource.offset[1] + PADDING;
++                let dst_x = upload.atlas_slot.x;
++                let dst_y = upload.atlas_slot.y;
+                 upload_to_atlas(backend, &self.image_cache, &upload, dst_x, dst_y)?;
+             }
+         }
