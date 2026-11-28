@@ -55,7 +55,7 @@ default = [
 directml = ["ort/directml"]
 download-binaries = [
     "ort/download-binaries",
-    "ort/tls-native",
+    "ort/tls-rustls-platform",
 ]
 formula-recognition = ["dep:tokenizers"]
 image-formats = ["image/default-formats"]
@@ -161,10 +161,7 @@ version = "0.1"
 
 [dependencies.ureq]
 version = "3.0"
-features = [
-    "rustls",
-    "platform-verifier",
-]
+features = ["rustls"]
 optional = true
 default-features = false
 
