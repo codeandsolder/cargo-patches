@@ -249,5 +249,13 @@
       "checksum": "1d055db1ea6baa6c329730897f63ff7b6ac93c46a9f053804e497e5960eb98e3",
       "patch": "patches/worker.patch"
     }
+  ],
+  "atomic-write-file-nix": [
+    {
+      "name": "atomic-write-file",
+      "version": "0.3.1",
+      "checksum": "ae67d5c03ee972c101a1d8db3ddbf8a9c819ad1ea9d6fd9cd385605547b60edb",
+      "patch": "patches/atomic-write-file.patch"
+    }
   ]
 }
