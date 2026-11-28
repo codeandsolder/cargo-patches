@@ -377,5 +377,13 @@
       "checksum": "f4ba0d9c310f46c3c626b1ec5b9e1a4db113eb711b65cd4ee4b41b53ac7742b1",
       "patch": "patches/cadmpeg-container.patch"
     }
+  ],
+  "axum-websocket": [
+    {
+      "name": "axum",
+      "version": "0.8.9",
+      "checksum": "31b698c5f9a010f6573133b09e0de5408834d0c82f8d7475a89fc1867a71cd90",
+      "patch": "patches/axum.patch"
+    }
   ]
 }
