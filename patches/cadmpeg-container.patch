@@ -1,0 +1,39 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -32,16 +32,19 @@
+ 
+ [dependencies.cadmpeg-core]
+ version = "0.6.12"
++path = "../cadmpeg-core"
+ 
+ [dependencies.crc32fast]
+ version = "1"
+ 
+ [dependencies.flate2]
+ version = "1"
++default-features = false
++features = ["zlib-rs"]
+ 
+ [dependencies.zip]
+ version = "9"
+-features = ["deflate-flate2"]
++features = ["deflate-flate2-zlib-rs"]
+ default-features = false
+ 
+ [dev-dependencies]
+--- a/Cargo.toml.orig
++++ b/Cargo.toml.orig
+@@ -10,10 +10,10 @@
+ rust-version.workspace = true
+ 
+ [dependencies]
+-cadmpeg-core.workspace = true
+-flate2.workspace = true
++cadmpeg-core = { version = "0.6.12", path = "../cadmpeg-core" }
++flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+ crc32fast.workspace = true
+-zip.workspace = true
++zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+ 
+ [dev-dependencies]
+ # Test-only byte-fixture writers shared with the codec crates, and raw ZIP fixture assembly:
