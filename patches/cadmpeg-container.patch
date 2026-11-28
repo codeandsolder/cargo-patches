@@ -12,7 +12,7 @@
  [dependencies.flate2]
  version = "1"
 +default-features = false
-+features = ["zlib-rs"]
++features = ["zlib-rs", "runtime_detection"]
  
  [dependencies.zip]
  version = "9"
@@ -30,7 +30,7 @@
 -cadmpeg-core.workspace = true
 -flate2.workspace = true
 +cadmpeg-core = { version = "0.6.12", path = "../cadmpeg-core" }
-+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
++flate2 = { version = "1", default-features = false, features = ["zlib-rs", "runtime_detection"] }
  crc32fast.workspace = true
 -zip.workspace = true
 +zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }

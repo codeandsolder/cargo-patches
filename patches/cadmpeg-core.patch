@@ -5,7 +5,7 @@
  [dependencies.flate2]
  version = "1"
 +default-features = false
-+features = ["zlib-rs"]
++features = ["zlib-rs", "runtime_detection"]
  
  [dependencies.memchr]
  version = "2"
@@ -16,7 +16,7 @@
  
  [dependencies]
 -flate2.workspace = true
-+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
++flate2 = { version = "1", default-features = false, features = ["zlib-rs", "runtime_detection"] }
  # Pure-Rust Zstandard, so the crate builds with no C toolchain; see `src/decode/zstd.rs` for what
  # `ruzstd` leaves unchecked that libzstd checks, and this crate therefore checks itself.
  ruzstd.workspace = true
