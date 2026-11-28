@@ -79,3 +79,8 @@ same family revision. Its regression gate exercises ordinary GPU glyph reuse,
 subpixel placement, retained-scene isolation, and leased glyph residency on a
 working WGPU adapter (Mesa Vulkan is sufficient). The atlas is populated on
 first use; fixed-cell consumers can pin just their required glyph subset.
+
+The Wayland modernization family also patches ui-events-winit 0.3.0 to
+stop implicitly enabling Winit's default features. Event conversion must not
+select the application windowing backends or a client-side decoration engine;
+the window host explicitly selects X11, Wayland and raw-window-handle support.
