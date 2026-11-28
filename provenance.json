@@ -1,0 +1,17 @@
+{
+  "family": "vtkio-xml-security",
+  "packages": [
+    {
+      "name": "quick-xml",
+      "version": "0.41.0",
+      "checksum": "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1",
+      "patch": "patches/quick-xml.patch"
+    },
+    {
+      "name": "vtkio",
+      "version": "0.7.0-rc2",
+      "checksum": "9d7cba514932ebb50de553d2abf395d0702333ea28ba900fec629d88cd4e79a9",
+      "patch": "patches/vtkio.patch"
+    }
+  ]
+}
