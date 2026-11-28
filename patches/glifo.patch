@@ -342,10 +342,37 @@ index d9b5c29..72007ca 100644
  pub use commands::{AtlasCommand, AtlasCommandRecorder, AtlasPaint};
  pub use key::GlyphCacheKey;
 diff --git a/src/glyph.rs b/src/glyph.rs
-index b0bea9f..3fbb15b 100644
+index b0bea9f..885ee91 100644
 --- a/src/glyph.rs
 +++ b/src/glyph.rs
-@@ -504,15 +504,24 @@ impl<'a, 'b, Glyphs: Iterator<Item = Glyph> + Clone> GlyphRunRenderer<'a, 'b, Gl
+@@ -99,7 +99,7 @@ pub enum GlyphSkipReason {
+     PngSupportDisabled,
+     /// The glyph has bitmap data in a format that is not supported.
+     UnsupportedBitmapFormat,
+-    /// The glyph's PNG bitmap data could not be decoded.
++    /// The glyph's bitmap data could not be decoded.
+     BitmapDecodeFailed,
+     /// No renderable color, bitmap, or outline representation was found.
+     NoRenderableRepresentation,
+@@ -188,6 +188,8 @@ pub(crate) enum CachedGlyphType {
+     Outline,
+     /// A bitmap glyph cached in the atlas.
+     Bitmap,
++    /// A monochrome bitmap coverage mask cached in the atlas.
++    BitmapMask,
+     /// A COLR glyph cached in the atlas.
+     /// The `Rect` parameter contains the fractional area dimensions
+     /// to preserve sub-pixel accuracy during rendering.
+@@ -229,6 +231,8 @@ pub(crate) struct GlyphOutline {
+ pub(crate) struct GlyphBitmap {
+     /// The pixmap of the glyph.
+     pub(crate) pixmap: Arc<Pixmap>,
++    /// Whether the pixels represent monochrome coverage rather than intrinsic color.
++    pub(crate) mask: bool,
+     /// The rectangular area that should be filled with the bitmap when painting.
+     pub(crate) area: Rect,
+ }
+@@ -504,15 +508,24 @@ impl<'a, 'b, Glyphs: Iterator<Item = Glyph> + Clone> GlyphRunRenderer<'a, 'b, Gl
              // also be assumed to be the case for any other potential backend.)
              // Therefore, we can calculate the relative paint transform for
              // the glyph by pre-concatenating it with the inverted outline transform.
@@ -373,7 +400,15 @@ index b0bea9f..3fbb15b 100644
                      BLACK,
                      BLACK_PACKED,
                      font_embolden,
-@@ -553,8 +562,10 @@ impl<'a, 'b, Glyphs: Iterator<Item = Glyph> + Clone> GlyphRunRenderer<'a, 'b, Gl
+@@ -527,6 +540,7 @@ impl<'a, 'b, Glyphs: Iterator<Item = Glyph> + Clone> GlyphRunRenderer<'a, 'b, Gl
+                     cached_slot,
+                     outline_transform,
+                     CachedGlyphType::Outline,
++                    Affine::IDENTITY,
+                 );
+                 continue;
+             }
+@@ -553,8 +567,10 @@ impl<'a, 'b, Glyphs: Iterator<Item = Glyph> + Clone> GlyphRunRenderer<'a, 'b, Gl
                      font_index: font_info.index,
                      glyph_id: glyph.id,
                      size_bits: draw_props.font_size.to_bits(),
@@ -384,7 +419,7 @@ index b0bea9f..3fbb15b 100644
                      context_color,
                      context_color_packed,
                      embolden_x_bits: 0,
-@@ -566,6 +577,10 @@ impl<'a, 'b, Glyphs: Iterator<Item = Glyph> + Clone> GlyphRunRenderer<'a, 'b, Gl
+@@ -566,6 +582,10 @@ impl<'a, 'b, Glyphs: Iterator<Item = Glyph> + Clone> GlyphRunRenderer<'a, 'b, Gl
                  });
  
                  if let Some(ref key) = cache_key
@@ -395,7 +430,15 @@ index b0bea9f..3fbb15b 100644
                      && let Some(cached_slot) = self.atlas_cacher.get(key)
                  {
                      // Use fractional scaled_bbox dimensions to preserve sub-pixel accuracy.
-@@ -618,53 +633,19 @@ impl<'a, 'b, Glyphs: Iterator<Item = Glyph> + Clone> GlyphRunRenderer<'a, 'b, Gl
+@@ -580,6 +600,7 @@ impl<'a, 'b, Glyphs: Iterator<Item = Glyph> + Clone> GlyphRunRenderer<'a, 'b, Gl
+                         cached_slot,
+                         outline_transform,
+                         CachedGlyphType::Colr(area),
++                        Affine::IDENTITY,
+                     );
+                     continue;
+                 }
+@@ -618,53 +639,19 @@ impl<'a, 'b, Glyphs: Iterator<Item = Glyph> + Clone> GlyphRunRenderer<'a, 'b, Gl
  
              // ── Bitmap Glyphs ────────────────────────────────────────────
              let mut bitmap_unavailable_reason = None;
@@ -457,7 +500,7 @@ index b0bea9f..3fbb15b 100644
                      context_color: BLACK,
                      context_color_packed: BLACK_PACKED,
                      embolden_x_bits: 0,
-@@ -674,43 +655,79 @@ impl<'a, 'b, Glyphs: Iterator<Item = Glyph> + Clone> GlyphRunRenderer<'a, 'b, Gl
+@@ -674,43 +661,78 @@ impl<'a, 'b, Glyphs: Iterator<Item = Glyph> + Clone> GlyphRunRenderer<'a, 'b, Gl
                      embolden_tolerance_bits: 0.1_f32.to_bits(),
                      var_coords: SmallVec::new(),
                  });
@@ -465,6 +508,12 @@ index b0bea9f..3fbb15b 100644
 +            });
  
 +            if let Some((bitmap_glyph, cache_key)) = bitmap_data {
++                let mask = matches!(&bitmap_glyph.data, BitmapData::Mask(_));
++                let kind = if mask {
++                    CachedGlyphType::BitmapMask
++                } else {
++                    CachedGlyphType::Bitmap
++                };
 +                let transform_for_height = |height| {
 +                    calculate_bitmap_transform(
 +                        glyph,
@@ -480,7 +529,7 @@ index b0bea9f..3fbb15b 100644
 -                    && let Some(cached_slot) = self.atlas_cacher.get(key)
 +                    && crate::renderer::supports_atlas_caching(
 +                        &transform_for_height(bitmap_glyph.height),
-+                        CachedGlyphType::Bitmap,
++                        kind,
 +                    )
 +                    && let Some(slot) = self.atlas_cacher.get(key)
                  {
@@ -488,9 +537,12 @@ index b0bea9f..3fbb15b 100644
                          renderer,
 -                        cached_slot,
 -                        outline_transform,
+-                        CachedGlyphType::Bitmap,
 +                        slot,
 +                        transform_for_height(u32::from(slot.height)),
-                         CachedGlyphType::Bitmap,
++                        kind,
++                        transform_for_height(u32::from(slot.height)).inverse()
++                            * scene_paint_transform,
                      );
                      continue;
                  }
@@ -503,18 +555,7 @@ index b0bea9f..3fbb15b 100644
 -                    outline_transform,
 -                    relative_paint_transform: Affine::IDENTITY,
 -                    cache_key,
-+                let decoded: Result<Pixmap, GlyphSkipReason> = match bitmap_glyph.data {
-+                    #[cfg(feature = "png")]
-+                    BitmapData::Png(data) => match Pixmap::from_png(std::io::Cursor::new(data)) {
-+                        Ok(pixmap) => Ok(pixmap),
-+                        Err(_) => Err(GlyphSkipReason::BitmapDecodeFailed),
-+                    },
-+                    #[cfg(not(feature = "png"))]
-+                    BitmapData::Png(_) => Err(GlyphSkipReason::PngSupportDisabled),
-+                    BitmapData::Bgra(_) | BitmapData::Mask(_) => {
-+                        Err(GlyphSkipReason::UnsupportedBitmapFormat)
-+                    }
-                 };
+-                };
 -                match style {
 -                    Style::Fill => fill_glyph(
 -                        renderer,
@@ -528,16 +569,19 @@ index b0bea9f..3fbb15b 100644
 -                        &mut self.atlas_cacher,
 -                        &mut outline_cache_session,
 -                    ),
++                let decoded =
++                    decode_bitmap(&bitmap_glyph.data, bitmap_glyph.width, bitmap_glyph.height);
 +                match decoded {
 +                    Ok(pixmap) => {
 +                        let outline_transform = transform_for_height(u32::from(pixmap.height()));
 +                        // Cache miss — wrap the decoded pixmap for rendering.
-+                        let glyph_type = create_bitmap_glyph(pixmap);
++                        let glyph_type = create_bitmap_glyph(pixmap, mask);
 +
 +                        let prepared_glyph = PreparedGlyph {
 +                            glyph_type,
 +                            outline_transform,
-+                            relative_paint_transform: Affine::IDENTITY,
++                            relative_paint_transform: outline_transform.inverse()
++                                * scene_paint_transform,
 +                            cache_key,
 +                        };
 +                        match style {
@@ -562,7 +606,114 @@ index b0bea9f..3fbb15b 100644
              }
  
              // ── Outline Glyphs ──────────────────────────────────────────
-@@ -1344,7 +1361,7 @@ fn create_bitmap_glyph(pixmap: Pixmap) -> GlyphType<'static> {
+@@ -1314,11 +1336,97 @@ fn calculate_outline_transform(
+     Affine::new(final_transform)
+ }
+ 
++// Bound the decoded allocation independently of the font's strike metadata.
++fn bitmap_dimensions(width: u32, height: u32) -> Result<(u16, u16), GlyphSkipReason> {
++    let width = u16::try_from(width).map_err(|_| GlyphSkipReason::BitmapDecodeFailed)?;
++    let height = u16::try_from(height).map_err(|_| GlyphSkipReason::BitmapDecodeFailed)?;
++    if width == 0 || height == 0 || u32::from(width) * u32::from(height) > 16 * 1024 * 1024 {
++        return Err(GlyphSkipReason::BitmapDecodeFailed);
++    }
++    Ok((width, height))
++}
++
++fn decode_bitmap(
++    data: &BitmapData<'_>,
++    width: u32,
++    height: u32,
++) -> Result<Pixmap, GlyphSkipReason> {
++    match data {
++        #[cfg(feature = "png")]
++        BitmapData::Png(bytes) => {
++            let mut decoder = png::Decoder::new(std::io::Cursor::new(*bytes));
++            let info = decoder
++                .read_header_info()
++                .map_err(|_| GlyphSkipReason::BitmapDecodeFailed)?;
++            bitmap_dimensions(info.width, info.height)?;
++            Pixmap::from_png(std::io::Cursor::new(*bytes))
++                .map_err(|_| GlyphSkipReason::BitmapDecodeFailed)
++        }
++        #[cfg(not(feature = "png"))]
++        BitmapData::Png(_) => Err(GlyphSkipReason::PngSupportDisabled),
++        BitmapData::Bgra(bytes) => {
++            let (width, height) = bitmap_dimensions(width, height)?;
++            let len = usize::from(width) * usize::from(height) * 4;
++            if bytes.len() != len {
++                return Err(GlyphSkipReason::BitmapDecodeFailed);
++            }
++            let mut pixmap = Pixmap::new(width, height);
++            for (dst, src) in pixmap.data_mut().iter_mut().zip(bytes.chunks_exact(4)) {
++                let a = src[3];
++                // BGRA font strikes are already premultiplied; reject invalid pixels.
++                if src[..3].iter().any(|&component| component > a) {
++                    return Err(GlyphSkipReason::BitmapDecodeFailed);
++                }
++                *dst = PremulRgba8 {
++                    r: src[2],
++                    g: src[1],
++                    b: src[0],
++                    a,
++                };
++            }
++            Ok(pixmap)
++        }
++        BitmapData::Mask(mask) => {
++            let (width, height) = bitmap_dimensions(width, height)?;
++            let bits = usize::from(mask.bpp);
++            if !matches!(bits, 1 | 2 | 4 | 8) {
++                return Err(GlyphSkipReason::UnsupportedBitmapFormat);
++            }
++            let row_bits = usize::from(width) * bits;
++            let bytes = if mask.is_packed {
++                (row_bits * usize::from(height)).div_ceil(8)
++            } else {
++                row_bits.div_ceil(8) * usize::from(height)
++            };
++            // Skrifa's row-aligned decoder iterates all supplied rows. Limit it
++            // to the declared dimensions, including when a font has padding.
++            let mut mask = mask.clone();
++            mask.data = mask
++                .data
++                .get(..bytes)
++                .ok_or(GlyphSkipReason::BitmapDecodeFailed)?;
++            let coverage = mask
++                .decode(u32::from(width), u32::from(height))
++                .map_err(|_| GlyphSkipReason::BitmapDecodeFailed)?;
++            let mut pixmap = Pixmap::new(width, height);
++            for (dst, a) in pixmap.data_mut().iter_mut().zip(coverage) {
++                *dst = PremulRgba8 {
++                    r: a,
++                    g: a,
++                    b: a,
++                    a,
++                };
++            }
++            Ok(pixmap)
++        }
++    }
++}
++
+ /// Create bitmap glyph data.
+ ///
+ /// This wraps the pixmap in a `GlyphType::Bitmap` with its display area,
+ /// without any positioning information.
+-fn create_bitmap_glyph(pixmap: Pixmap) -> GlyphType<'static> {
++fn create_bitmap_glyph(pixmap: Pixmap, mask: bool) -> GlyphType<'static> {
+     // Scale factor already accounts for ppem, so we can just draw in the size of the
+     // actual image
+     let area = Rect::new(
+@@ -1330,6 +1438,7 @@ fn create_bitmap_glyph(pixmap: Pixmap) -> GlyphType<'static> {
+ 
+     GlyphType::Bitmap(GlyphBitmap {
+         pixmap: Arc::new(pixmap),
++        mask,
+         area,
+     })
+ }
+@@ -1344,7 +1453,7 @@ fn create_bitmap_glyph(pixmap: Pixmap) -> GlyphType<'static> {
  /// - Special handling for Apple Color Emoji
  fn calculate_bitmap_transform(
      glyph: Glyph,
@@ -571,7 +722,7 @@ index b0bea9f..3fbb15b 100644
      draw_props: DrawProps,
      font_size: f32,
      upem: f32,
-@@ -1371,7 +1388,7 @@ fn calculate_bitmap_transform(
+@@ -1371,7 +1480,7 @@ fn calculate_bitmap_transform(
          Origin::TopLeft => Vec2::default(),
          Origin::BottomLeft => Vec2 {
              x: 0.,
@@ -581,7 +732,7 @@ index b0bea9f..3fbb15b 100644
      };
  
 diff --git a/src/renderer.rs b/src/renderer.rs
-index 3347cd6..c1c696b 100644
+index 3347cd6..5e305a9 100644
 --- a/src/renderer.rs
 +++ b/src/renderer.rs
 @@ -4,7 +4,7 @@
@@ -593,7 +744,133 @@ index 3347cd6..c1c696b 100644
  use crate::atlas::{AtlasSlot, GlyphAtlas, GlyphCacheKey, ImageCache, RasterMetrics};
  use crate::colr::ColrPainter;
  use crate::glyph::{
-@@ -342,15 +342,15 @@ fn render_from_atlas(
+@@ -60,7 +60,9 @@ pub(crate) fn fill_glyph(
+                     paint_transform,
+                 );
+             }
+-            GlyphType::Bitmap(glyph) => render_uncached_bitmap_glyph(renderer, glyph, transform),
++            GlyphType::Bitmap(glyph) => {
++                render_uncached_bitmap_glyph(renderer, glyph, transform, paint_transform)
++            }
+             GlyphType::Colr(glyph) => {
+                 let context_color = renderer.get_context_color();
+                 render_uncached_colr_glyph(
+@@ -109,6 +111,7 @@ pub(crate) fn fill_glyph(
+                     renderer,
+                     &glyph,
+                     transform,
++                    paint_transform,
+                     key,
+                     glyph_atlas,
+                     image_cache,
+@@ -117,7 +120,7 @@ pub(crate) fn fill_glyph(
+                 return;
+             }
+ 
+-            render_uncached_bitmap_glyph(renderer, glyph, transform);
++            render_uncached_bitmap_glyph(renderer, glyph, transform, paint_transform);
+         }
+         GlyphType::Colr(glyph) => {
+             if let Some(key) = cache_key.take()
+@@ -234,9 +237,33 @@ fn render_uncached_bitmap_glyph(
+     renderer: &mut impl GlyphRenderer,
+     glyph: GlyphBitmap,
+     outline_transform: Affine,
++    paint_transform: Affine,
++) {
++    render_bitmap(
++        renderer,
++        ImageSource::Pixmap(glyph.pixmap),
++        Affine::IDENTITY,
++        outline_transform,
++        paint_transform,
++        glyph.area,
++        glyph.mask,
++    );
++}
++
++// Bitmap color is intrinsic. Monochrome strikes instead carry coverage;
++// a solid brush uses the fast tint path, and an arbitrary brush is clipped
++// by the same coverage using an isolated destination-in composition.
++fn render_bitmap(
++    renderer: &mut impl GlyphRenderer,
++    source: ImageSource,
++    image_transform: Affine,
++    transform: Affine,
++    paint_transform: Affine,
++    area: Rect,
++    mask: bool,
+ ) {
+     let image = Image {
+-        image: ImageSource::Pixmap(glyph.pixmap),
++        image: source,
+         sampler: ImageSampler {
+             x_extend: Extend::Pad,
+             y_extend: Extend::Pad,
+@@ -244,11 +271,35 @@ fn render_uncached_bitmap_glyph(
+             alpha: 1.0,
+         },
+     };
+-
++    let tint = if mask {
++        match renderer.current_paint() {
++            PaintType::Solid(color) => Some(Tint {
++                color: *color,
++                mode: TintMode::AlphaMask,
++            }),
++            _ => None,
++        }
++    } else {
++        None
++    };
++    let complex_mask = mask && tint.is_none();
+     let state = renderer.save_state();
+-    renderer.set_transform(outline_transform);
++    renderer.set_transform(transform);
++    if complex_mask {
++        renderer.push_clip_layer(&area.to_path(0.1));
++        renderer.set_paint_transform(paint_transform);
++        renderer.fill_rect(&area);
++        renderer.push_blend_layer(peniko::Compose::DestIn.into());
++    }
++    renderer.set_tint(tint);
+     renderer.set_paint_image(image);
+-    renderer.fill_rect(&glyph.area);
++    renderer.set_paint_transform(image_transform);
++    renderer.fill_rect(&area);
++    renderer.set_tint(None);
++    if complex_mask {
++        renderer.pop_layer();
++        renderer.pop_layer();
++    }
+     renderer.restore_state(state);
+ }
+ 
+@@ -292,14 +343,21 @@ pub(crate) fn render_cached_glyph(
+     cached_slot: AtlasSlot,
+     transform: Affine,
+     glyph_type: CachedGlyphType,
++    paint_transform: Affine,
+ ) {
+     match glyph_type {
+         CachedGlyphType::Outline => {
+             let tint = renderer.get_context_color();
+             render_outline_glyph_from_atlas(renderer, cached_slot, transform, tint);
+         }
+-        CachedGlyphType::Bitmap => {
+-            render_bitmap_glyph_from_atlas(renderer, cached_slot, transform);
++        CachedGlyphType::Bitmap | CachedGlyphType::BitmapMask => {
++            render_bitmap_glyph_from_atlas(
++                renderer,
++                cached_slot,
++                transform,
++                paint_transform,
++                matches!(glyph_type, CachedGlyphType::BitmapMask),
++            );
+         }
+         CachedGlyphType::Colr(area) => {
+             render_colr_glyph_from_atlas(renderer, cached_slot, transform, area);
+@@ -342,15 +400,15 @@ fn render_from_atlas(
  fn render_outline_to_atlas(
      path: &Arc<BezPath>,
      scale: f64,
@@ -612,7 +889,7 @@ index 3347cd6..c1c696b 100644
          ));
      recorder.set_transform(outline_transform);
      recorder.set_paint(BLACK.into());
-@@ -409,7 +409,7 @@ fn insert_and_render_outline(
+@@ -409,7 +467,7 @@ fn insert_and_render_outline(
      let bounds = glyph.bbox.scale_from_origin(glyph.scale);
      let raster_metrics = calculate_raster_metrics(&bounds);
  
@@ -621,7 +898,7 @@ index 3347cd6..c1c696b 100644
  
      let Some((atlas_slot, recorder)) = glyph_atlas.insert(image_cache, cache_key, raster_metrics)
      else {
-@@ -419,7 +419,7 @@ fn insert_and_render_outline(
+@@ -419,7 +477,7 @@ fn insert_and_render_outline(
      render_outline_to_atlas(
          &glyph.path,
          glyph.scale,
@@ -630,7 +907,31 @@ index 3347cd6..c1c696b 100644
          recorder,
          atlas_slot,
          raster_metrics,
-@@ -526,8 +526,8 @@ fn render_outline_glyph_from_atlas(
+@@ -433,6 +491,7 @@ fn insert_and_render_bitmap(
+     renderer: &mut impl GlyphRenderer,
+     glyph: &GlyphBitmap,
+     transform: Affine,
++    paint_transform: Affine,
+     cache_key: GlyphCacheKey,
+     glyph_atlas: &mut GlyphAtlas,
+     image_cache: &mut ImageCache,
+@@ -461,14 +520,7 @@ fn insert_and_render_bitmap(
+     // the render pass that resolves image references.
+     glyph_atlas.push_pending_upload(atlas_slot.image_id, Arc::clone(&glyph.pixmap), atlas_slot);
+ 
+-    render_from_atlas(
+-        renderer,
+-        atlas_slot,
+-        transform,
+-        glyph.area,
+-        ImageQuality::Medium,
+-        None,
+-    );
++    render_bitmap_glyph_from_atlas(renderer, atlas_slot, transform, paint_transform, glyph.mask);
+     CacheResult::CachedAndRendered
+ }
+ 
+@@ -526,8 +578,8 @@ fn render_outline_glyph_from_atlas(
  ) {
      let [_, _, _, _, tx, ty] = outline_transform.as_coeffs();
      let rect_transform = Affine::translate((
@@ -641,7 +942,38 @@ index 3347cd6..c1c696b 100644
      ));
      let area = Rect::new(0.0, 0.0, atlas_slot.width as f64, atlas_slot.height as f64);
      render_from_atlas(
-@@ -589,10 +589,8 @@ fn render_colr_glyph_from_atlas(
+@@ -549,15 +601,25 @@ fn render_bitmap_glyph_from_atlas(
+     renderer: &mut impl GlyphRenderer,
+     atlas_slot: AtlasSlot,
+     transform: Affine,
++    paint_transform: Affine,
++    mask: bool,
+ ) {
+-    let area = Rect::new(0.0, 0.0, atlas_slot.width as f64, atlas_slot.height as f64);
+-    render_from_atlas(
++    let area = Rect::new(
++        0.0,
++        0.0,
++        f64::from(atlas_slot.width),
++        f64::from(atlas_slot.height),
++    );
++    let image_transform = renderer.atlas_paint_transform(&atlas_slot);
++    let source = renderer.atlas_image_source(&atlas_slot);
++    render_bitmap(
+         renderer,
+-        atlas_slot,
++        source,
++        image_transform,
+         transform,
++        paint_transform,
+         area,
+-        ImageQuality::Medium,
+-        None,
++        mask,
+     );
+ }
+ 
+@@ -589,10 +651,8 @@ fn render_colr_glyph_from_atlas(
  )]
  #[inline]
  pub(crate) fn calculate_raster_metrics(bounds: &Rect) -> RasterMetrics {
@@ -654,7 +986,7 @@ index 3347cd6..c1c696b 100644
      // provides the guard band needed by the GPU renderer's Extend::Pad sampling.
      let min_x = bounds.x0.floor() as i32;
      let max_x = bounds.x1.ceil() as i32 + 1;
-@@ -600,7 +598,7 @@ pub(crate) fn calculate_raster_metrics(bounds: &Rect) -> RasterMetrics {
+@@ -600,7 +660,7 @@ pub(crate) fn calculate_raster_metrics(bounds: &Rect) -> RasterMetrics {
      // For Y, we flip the coordinate system: font Y up -> screen Y down
      // After flipping Y, min_y becomes -max_y and max_y becomes -min_y
      let flipped_min_y = (-bounds.y1).floor() as i32;
@@ -663,3 +995,12 @@ index 3347cd6..c1c696b 100644
  
      let width = (max_x - min_x) as u16;
      let height = (flipped_max_y - flipped_min_y) as u16;
+@@ -666,7 +726,7 @@ pub(crate) fn supports_atlas_caching(transform: &Affine, glyph_type: CachedGlyph
+         // For bitmap glyphs, we need to relax the condition a bit, since bitmap glyphs already have a fixed
+         // size and thus might not correspond 100% to the font size. Therefore, they likely don't have a unit
+         // transform.
+-        CachedGlyphType::Bitmap => {
++        CachedGlyphType::Bitmap | CachedGlyphType::BitmapMask => {
+             !transform.has_skew() && a.is_sign_positive() && d.is_sign_positive()
+         }
+     }

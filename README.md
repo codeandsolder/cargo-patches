@@ -91,3 +91,10 @@ backend, reports worker initialization and selection errors, and preserves the
 primary-selection protocol's independent availability. The validation workspace
 checks the type boundary and that event translation cannot enable the old title
 renderer.
+
+Color glyphs use full-color PNG/BGRA strikes or color-layer vector rendering;
+monochrome embedded strikes cache coverage independently of the brush. The
+Hybrid sink applies non-default opacity/blend to isolated color glyphs and
+resolves uncached CPU pixmaps into scene-owned GPU textures before rendering.
+The regression fixtures cover PNG, COLR, raw BGRA and embedded coverage masks
+with both cached and retained rendering.

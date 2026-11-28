@@ -1,5 +1,5 @@
 diff --git a/src/lib.rs b/src/lib.rs
-index 7b31fcd..ee8d99f 100644
+index 7b31fcd..623f1eb 100644
 --- a/src/lib.rs
 +++ b/src/lib.rs
 @@ -133,6 +133,8 @@ pub use render::{
@@ -20,6 +20,31 @@ index 7b31fcd..ee8d99f 100644
  pub use resources::Resources;
  pub use scene::{LayersConfig, MemorySettings, RenderSettings, Scene};
  #[cfg(feature = "text")]
+@@ -177,6 +181,9 @@ pub enum RenderError {
+     /// A glyph paint referenced an atlas entry that does not exist.
+     #[error("Missing atlas entry for {0:?}")]
+     MissingAtlasEntry(ImageId),
++    /// An owned CPU bitmap was not uploaded before GPU rendering.
++    #[error("CPU bitmap paint must be resolved to a GPU texture before rendering")]
++    UnresolvedPixmap,
+     /// An intermediate texture allocation failed.
+     #[error(transparent)]
+     IntermediateTexture(#[from] IntermediateTextureError),
+diff --git a/src/render/common/scene_preparer.rs b/src/render/common/scene_preparer.rs
+index d261674..f92e8a4 100644
+--- a/src/render/common/scene_preparer.rs
++++ b/src/render/common/scene_preparer.rs
+@@ -133,9 +133,7 @@ impl ScenePreparer {
+                     ImageSource::ExternalTexture {
+                         id, source_region, ..
+                     } => encode_external_texture(*id, img, *source_region)?,
+-                    ImageSource::Pixmap(_) => {
+-                        panic!("pixmap image sources are not supported by Vello GPU")
+-                    }
++                    ImageSource::Pixmap(_) => return Err(RenderError::UnresolvedPixmap),
+                 },
+                 EncodedPaint::Gradient(gradient) => {
+                     let (gradient_start, gradient_width) =
 diff --git a/src/render/mod.rs b/src/render/mod.rs
 index 023f9b9..a3d667b 100644
 --- a/src/render/mod.rs
@@ -266,6 +291,44 @@ index f48cbe2..c8abeb9 100644
      pub(crate) fn new(glyph_atlas_config: AtlasConfig) -> Self {
          Self {
              image_cache: ImageCache::new_with_config(glyph_atlas_config),
+diff --git a/src/scene.rs b/src/scene.rs
+index 758f24f..587a42c 100644
+--- a/src/scene.rs
++++ b/src/scene.rs
+@@ -320,6 +320,33 @@ impl Scene {
+             .effective_paint_transform(self.transforms())
+     }
+ 
++    /// Replace owned CPU bitmap paints with externally uploaded textures.
++    /// Existing texture and atlas paints are unchanged. The caller must retain
++    /// the returned texture identities for the lifetime of the scene.
++    /// # Errors
++    /// Returns an error from the upload callback; discard the scene on failure.
++    pub fn resolve_pixmap_images<E>(
++        &mut self,
++        mut upload: impl FnMut(
++            &alloc::sync::Arc<vello_common::pixmap::Pixmap>,
++        ) -> Result<vello_common::TextureId, E>,
++    ) -> Result<(), E> {
++        use vello_common::paint::{ImageSource, TextureRegion};
++        for paint in &mut self.encoded_paints {
++            if let EncodedPaint::Image(image) = paint
++                && let ImageSource::Pixmap(pixmap) = &image.source
++            {
++                let id = upload(pixmap)?;
++                image.source = ImageSource::external_texture(
++                    id,
++                    TextureRegion::Full,
++                    pixmap.may_have_transparency(),
++                );
++            }
++        }
++        Ok(())
++    }
++
+     /// Encode the current paint into a `Paint` that can be used for rendering.
+     ///
+     /// For solid colors, this is a simple conversion. For gradients and images,
 diff --git a/src/text.rs b/src/text.rs
 index b1d190b..2b28c49 100644
 --- a/src/text.rs
