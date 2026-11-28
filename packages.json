@@ -149,9 +149,15 @@
     },
     {
       "name": "usvg",
-      "version": "0.47.0",
-      "checksum": "d46cf96c5f498d36b7a9693bc6a7075c0bb9303189d61b2249b0dc3d309c07de",
+      "version": "0.50.0",
+      "checksum": "bdb896f04730b97805bbc3191fc57e4bf03face0f14577dd42e783c4d8c98802",
       "patch": "patches/usvg.patch"
+    },
+    {
+      "name": "skia-bindings",
+      "version": "0.153.3",
+      "checksum": "eb325787c91b3f6c34a7c6f2b8a2297b20292d733ca53a08c233e5028aec49af",
+      "patch": "patches/skia-bindings.patch"
     }
   ],
   "host-gpu-renderer": [
@@ -232,6 +238,66 @@
       "version": "0.18.0",
       "checksum": "1a98d30140e3296250832bbaaff83b27dcd6fa3cc70fb6f1f3e5c9c0023b5317",
       "patch": "patches/cgmath.patch"
+    }
+  ],
+  "brush-parser": [
+    {
+      "name": "brush-parser",
+      "version": "0.4.0",
+      "checksum": "9f64b19efc02f0dd6cac1d462e20a1098f425f09cb13624efbb1b7d63f061735",
+      "patch": "patches/brush-parser.patch"
+    }
+  ],
+  "worker-time": [
+    {
+      "name": "worker",
+      "version": "0.9.0",
+      "checksum": "1d055db1ea6baa6c329730897f63ff7b6ac93c46a9f053804e497e5960eb98e3",
+      "patch": "patches/worker.patch"
+    }
+  ],
+  "atomic-write-file-nix": [
+    {
+      "name": "atomic-write-file",
+      "version": "0.3.1",
+      "checksum": "ae67d5c03ee972c101a1d8db3ddbf8a9c819ad1ea9d6fd9cd385605547b60edb",
+      "patch": "patches/atomic-write-file.patch"
+    }
+  ],
+  "prometheus-text": [
+    {
+      "name": "prometheus",
+      "version": "0.14.0",
+      "checksum": "3ca5326d8d0b950a9acd87e6a3f94745394f62e4dae1b1ee22b2bc0c394af43a",
+      "patch": "patches/prometheus.patch"
+    }
+  ],
+  "ipmi-transports": [
+    {
+      "name": "ipmi-rs-core",
+      "version": "0.6.0",
+      "checksum": "a2dd1b1e749c89affd95b9667995e19a8f16c6a72c668a484d47ce964770bc2d",
+      "patch": "patches/ipmi-rs-core.patch"
+    },
+    {
+      "name": "ipmi-rs",
+      "version": "0.6.0",
+      "checksum": "ff183b5b6e52153a6750a378a920f808b108ddf830c6411491c2b2e76ef6847e",
+      "patch": "patches/ipmi-rs.patch"
+    }
+  ],
+  "oar-image-features": [
+    {
+      "name": "oar-ocr",
+      "version": "0.11.0",
+      "checksum": "bd048ac32b74560ee29ad643c7b7b4a62bdc8a8fe7fd360c2117edd680863866",
+      "patch": "patches/oar-ocr.patch"
+    },
+    {
+      "name": "oar-ocr-core",
+      "version": "0.11.0",
+      "checksum": "e0744c4a4795f98a00b7eda9022061bf3876d3a972a9d1a3cfbb5b8f64903a14",
+      "patch": "patches/oar-ocr-core.patch"
     }
   ],
   "cadmpeg-compression": [

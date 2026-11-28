@@ -1,0 +1,28 @@
+[package]
+name = "oar-image-feature-validation"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+resolver = "3"
+exclude = ["oar-ocr", "oar-ocr-core"]
+
+[features]
+default = ["encoded-formats"]
+encoded-formats = ["image/png", "image/pnm"]
+full-formats = ["oar-ocr/image-formats"]
+
+[dependencies]
+image = { version = "0.25.10", default-features = false }
+oar-ocr = { path = "oar-ocr", default-features = false, features = ["simd"] }
+# The image/geometry tests never load ONNX models. Check this configuration
+# without downloading or linking an unrelated ONNX Runtime distribution.
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["load-dynamic"] }
+
+[patch.crates-io]
+oar-ocr-core = { path = "oar-ocr-core" }
+
+[[test]]
+name = "image_features"
+path = "image_features.rs"
