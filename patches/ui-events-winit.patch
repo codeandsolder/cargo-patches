@@ -1,0 +1,25 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 9b4e1a4..2b1c087 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -55,6 +55,7 @@ default-features = false
+ 
+ [dependencies.winit]
+ version = "0.30.10"
++default-features = false
+ 
+ [target.'cfg(target_arch = "wasm32")'.dependencies.web-time]
+ version = "1.1.0"
+diff --git a/Cargo.toml.orig b/Cargo.toml.orig
+index c2cc869..af8af80 100644
+--- a/Cargo.toml.orig
++++ b/Cargo.toml.orig
+@@ -21,7 +21,7 @@ std = []
+ 
+ [dependencies]
+ ui-events = { workspace = true, features = ["std"] }
+-winit = "0.30.10"
++winit = { version = "0.30.10", default-features = false }
+ 
+ [target.'cfg(target_arch = "wasm32")'.dependencies]
+ web-time.workspace = true
