@@ -84,3 +84,10 @@ The Wayland modernization family also patches ui-events-winit 0.3.0 to
 stop implicitly enabling Winit's default features. Event conversion must not
 select the application windowing backends or a client-side decoration engine;
 the window host explicitly selects X11, Wayland and raw-window-handle support.
+
+The same family exposes Winit's owned Wayland connection for clipboard clients.
+Smithay clipboard uses that connection without reconstructing a raw display
+backend, reports worker initialization and selection errors, and preserves the
+primary-selection protocol's independent availability. The validation workspace
+checks the type boundary and that event translation cannot enable the old title
+renderer.

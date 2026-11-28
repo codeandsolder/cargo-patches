@@ -1,0 +1,534 @@
+diff --git a/examples/clipboard.rs b/examples/clipboard.rs
+index d34572e..dd52e80 100644
+--- a/examples/clipboard.rs
++++ b/examples/clipboard.rs
+@@ -8,13 +8,13 @@ use sctk::reexports::calloop::{EventLoop, LoopHandle};
+ use sctk::reexports::calloop_wayland_source::WaylandSource;
+ use sctk::reexports::client::globals::registry_queue_init;
+ use sctk::reexports::client::protocol::{wl_keyboard, wl_output, wl_seat, wl_shm, wl_surface};
+-use sctk::reexports::client::{Connection, Proxy, QueueHandle};
++use sctk::reexports::client::{Connection, QueueHandle};
+ use sctk::registry::{ProvidesRegistryState, RegistryState};
+ use sctk::seat::keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers};
+ use sctk::seat::{Capability, SeatHandler, SeatState};
+-use sctk::shell::WaylandSurface;
+-use sctk::shell::xdg::XdgShell;
+ use sctk::shell::xdg::window::{Window, WindowConfigure, WindowDecorations, WindowHandler};
++use sctk::shell::xdg::XdgShell;
++use sctk::shell::WaylandSurface;
+ use sctk::shm::slot::{Buffer, SlotPool};
+ use sctk::shm::{Shm, ShmHandler};
+ use sctk::{
+@@ -46,7 +46,7 @@ fn main() {
+     window.set_min_size(Some((MIN_DIM_SIZE as u32, MIN_DIM_SIZE as u32)));
+     window.commit();
+ 
+-    let clipboard = unsafe { Clipboard::new(connection.display().id().as_ptr() as *mut _) };
++    let clipboard = Clipboard::from_connection(connection.clone()).unwrap();
+ 
+     let pool = SlotPool::new(MIN_DIM_SIZE * MIN_DIM_SIZE * 4, &shm).expect("Failed to create pool");
+ 
+@@ -69,7 +69,8 @@ fn main() {
+         loop_handle: event_loop.handle(),
+     };
+ 
+-    // We don't draw immediately, the configure will notify us when to first draw.
++    // We don't draw immediately, the configure will notify us when to first
++    // draw.
+     loop {
+         event_loop.dispatch(None, &mut simple_window).unwrap();
+ 
+@@ -307,13 +308,13 @@ impl KeyboardHandler for SimpleWindow {
+             // Copy primary.
+             Some("C") => {
+                 let to_store = "Copy primary";
+-                self.clipboard.store_primary(to_store);
++                self.clipboard.store_primary(to_store).unwrap();
+                 println!("Copied string into primary clipboard: {}", to_store);
+             },
+             // Copy clipboard.
+             Some("c") => {
+                 let to_store = "Copy";
+-                self.clipboard.store(to_store);
++                self.clipboard.store(to_store).unwrap();
+                 println!("Copied string into clipboard: {}", to_store);
+             },
+             _ => (),
+@@ -376,8 +377,8 @@ impl SimpleWindow {
+         let canvas = match self.pool.canvas(buffer) {
+             Some(canvas) => canvas,
+             None => {
+-                // This should be rare, but if the compositor has not released the previous
+-                // buffer, we need double-buffering.
++                // This should be rare, but if the compositor has not released
++                // the previous buffer, we need double-buffering.
+                 let (second_buffer, canvas) = self
+                     .pool
+                     .create_buffer(
+diff --git a/src/lib.rs b/src/lib.rs
+index 1f0b746..3edfd70 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -5,12 +5,12 @@
+ 
+ #![deny(clippy::all, clippy::if_not_else, clippy::enum_glob_use)]
+ use std::ffi::c_void;
+-use std::io::Result;
++use std::io::{Error, Result};
+ use std::sync::mpsc::{self, Receiver};
+ 
+ use sctk::reexports::calloop::channel::{self, Sender};
+-use sctk::reexports::client::Connection;
+ use sctk::reexports::client::backend::Backend;
++use sctk::reexports::client::Connection;
+ 
+ mod mime;
+ mod state;
+@@ -31,32 +31,48 @@ impl Clipboard {
+     ///
+     /// `display` must be a valid `*mut wl_display` pointer, and it must remain
+     /// valid for as long as `Clipboard` object is alive.
+-    pub unsafe fn new(display: *mut c_void) -> Self {
++    pub unsafe fn new(display: *mut c_void) -> Result<Self> {
+         let backend = unsafe { Backend::from_foreign_display(display.cast()) };
+-        let connection = Connection::from_backend(backend);
++        Self::from_connection(Connection::from_backend(backend))
++    }
+ 
+-        // Create channel to send data to clipboard thread.
++    /// Create a clipboard on an owned Wayland connection, with an independent
++    /// event queue. A successful result means the clipboard worker has
++    /// initialized.
++    pub fn from_connection(connection: Connection) -> Result<Self> {
+         let (request_sender, rx_chan) = channel::channel();
+-        // Create channel to get data from the clipboard thread.
+         let (clipboard_reply_sender, request_receiver) = mpsc::channel();
+-
+-        let name = String::from("smithay-clipboard");
+-        let clipboard_thread = worker::spawn(name, connection, rx_chan, clipboard_reply_sender);
+-
+-        Self { request_receiver, request_sender, clipboard_thread }
++        let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
++        let clipboard_thread = worker::spawn(
++            String::from("smithay-clipboard"),
++            connection,
++            rx_chan,
++            clipboard_reply_sender,
++            ready_sender,
++        )?;
++        let ready = ready_receiver
++            .recv()
++            .map_err(|_| Error::other("clipboard worker exited during startup"))?;
++        if let Err(error) = ready {
++            let _ = clipboard_thread.join();
++            return Err(error);
++        }
++        Ok(Self { request_receiver, request_sender, clipboard_thread: Some(clipboard_thread) })
+     }
+ 
+     /// Load clipboard data.
+     ///
+     /// Loads content from a clipboard on a last observed seat.
+     pub fn load(&self) -> Result<String> {
+-        let _ = self.request_sender.send(worker::Command::Load);
++        self.request_sender
++            .send(worker::Command::Load)
++            .map_err(|_| Error::other("clipboard worker is dead"))?;
+ 
+         if let Ok(reply) = self.request_receiver.recv() {
+             reply
+         } else {
+-            // The clipboard thread is dead, however we shouldn't crash downstream, so
+-            // propogating an error.
++            // The clipboard thread is dead, however we shouldn't crash
++            // downstream, so propogating an error.
+             Err(std::io::Error::other("clipboard is dead."))
+         }
+     }
+@@ -64,22 +80,23 @@ impl Clipboard {
+     /// Store to a clipboard.
+     ///
+     /// Stores to a clipboard on a last observed seat.
+-    pub fn store<T: Into<String>>(&self, text: T) {
+-        let request = worker::Command::Store(text.into());
+-        let _ = self.request_sender.send(request);
++    pub fn store<T: Into<String>>(&self, text: T) -> Result<()> {
++        self.store_selection(text.into(), false)
+     }
+ 
+     /// Load primary clipboard data.
+     ///
+     /// Loads content from a  primary clipboard on a last observed seat.
+     pub fn load_primary(&self) -> Result<String> {
+-        let _ = self.request_sender.send(worker::Command::LoadPrimary);
++        self.request_sender
++            .send(worker::Command::LoadPrimary)
++            .map_err(|_| Error::other("clipboard worker is dead"))?;
+ 
+         if let Ok(reply) = self.request_receiver.recv() {
+             reply
+         } else {
+-            // The clipboard thread is dead, however we shouldn't crash downstream, so
+-            // propogating an error.
++            // The clipboard thread is dead, however we shouldn't crash
++            // downstream, so propogating an error.
+             Err(std::io::Error::other("clipboard is dead."))
+         }
+     }
+@@ -87,9 +104,21 @@ impl Clipboard {
+     /// Store to a primary clipboard.
+     ///
+     /// Stores to a primary clipboard on a last observed seat.
+-    pub fn store_primary<T: Into<String>>(&self, text: T) {
+-        let request = worker::Command::StorePrimary(text.into());
+-        let _ = self.request_sender.send(request);
++    pub fn store_primary<T: Into<String>>(&self, text: T) -> Result<()> {
++        self.store_selection(text.into(), true)
++    }
++
++    fn store_selection(&self, text: String, primary: bool) -> Result<()> {
++        let (sender, receiver) = mpsc::channel();
++        let request = if primary {
++            worker::Command::StorePrimary(text, sender)
++        } else {
++            worker::Command::Store(text, sender)
++        };
++        self.request_sender.send(request).map_err(|_| Error::other("clipboard worker is dead"))?;
++        receiver
++            .recv()
++            .map_err(|_| Error::other("clipboard worker exited before accepting selection"))?
+     }
+ }
+ 
+diff --git a/src/state.rs b/src/state.rs
+index 866c51e..36c9884 100644
+--- a/src/state.rs
++++ b/src/state.rs
+@@ -10,9 +10,9 @@ use sctk::data_device_manager::data_device::{DataDevice, DataDeviceHandler};
+ use sctk::data_device_manager::data_offer::{DataOfferError, DataOfferHandler, DragOffer};
+ use sctk::data_device_manager::data_source::{CopyPasteSource, DataSourceHandler};
+ use sctk::data_device_manager::{DataDeviceManagerState, WritePipe};
+-use sctk::primary_selection::PrimarySelectionManagerState;
+ use sctk::primary_selection::device::{PrimarySelectionDevice, PrimarySelectionDeviceHandler};
+ use sctk::primary_selection::selection::{PrimarySelectionSource, PrimarySelectionSourceHandler};
++use sctk::primary_selection::PrimarySelectionManagerState;
+ use sctk::registry::{ProvidesRegistryState, RegistryState};
+ use sctk::seat::pointer::{PointerData, PointerEvent, PointerEventKind, PointerHandler};
+ use sctk::seat::{Capability, SeatHandler, SeatState};
+@@ -37,7 +37,7 @@ use sctk::reexports::protocols::wp::primary_selection::zv1::client::{
+ };
+ use wayland_backend::client::ObjectId;
+ 
+-use crate::mime::{ALLOWED_MIME_TYPES, MimeType, normalize_to_lf};
++use crate::mime::{normalize_to_lf, MimeType, ALLOWED_MIME_TYPES};
+ 
+ pub struct State {
+     pub primary_selection_manager_state: Option<PrimarySelectionManagerState>,
+@@ -106,39 +106,51 @@ impl State {
+         })
+     }
+ 
+-    /// Store selection for the given target.
+-    ///
+-    /// Selection source is only created when `Some(())` is returned.
+-    pub fn store_selection(&mut self, ty: SelectionTarget, contents: String) -> Option<()> {
+-        let latest = self.latest_seat.as_ref()?;
+-        let seat = self.seats.get_mut(latest)?;
+-
++    /// Store selection for the given target, reporting unavailable seats and
++    /// protocols.
++    pub fn store_selection(&mut self, ty: SelectionTarget, contents: String) -> Result<()> {
++        let latest = self
++            .latest_seat
++            .as_ref()
++            .ok_or_else(|| Error::other("no events received on any seat"))?;
++        let seat = self.seats.get_mut(latest).ok_or_else(|| Error::other("active seat lost"))?;
+         if !seat.has_focus {
+-            return None;
++            return Err(Error::other("client doesn't have focus"));
+         }
+-
+         let contents = Rc::from(contents.into_bytes());
+-
+         match ty {
+             SelectionTarget::Clipboard => {
+-                let mgr = self.data_device_manager_state.as_ref()?;
++                let mgr = self
++                    .data_device_manager_state
++                    .as_ref()
++                    .ok_or_else(|| Error::other("clipboard selection protocol is unavailable"))?;
++                let device = seat
++                    .data_device
++                    .as_ref()
++                    .ok_or_else(|| Error::other("active seat has no clipboard device"))?;
+                 self.data_selection_content = contents;
+                 let source =
+                     mgr.create_copy_paste_source(&self.queue_handle, ALLOWED_MIME_TYPES.iter());
+-                source.set_selection(seat.data_device.as_ref().unwrap(), seat.latest_serial);
++                source.set_selection(device, seat.latest_serial);
+                 self.data_sources.push(source);
+             },
+             SelectionTarget::Primary => {
+-                let mgr = self.primary_selection_manager_state.as_ref()?;
++                let mgr = self
++                    .primary_selection_manager_state
++                    .as_ref()
++                    .ok_or_else(|| Error::other("primary selection protocol is unavailable"))?;
++                let device = seat
++                    .primary_device
++                    .as_ref()
++                    .ok_or_else(|| Error::other("active seat has no primary selection device"))?;
+                 self.primary_selection_content = contents;
+                 let source =
+                     mgr.create_selection_source(&self.queue_handle, ALLOWED_MIME_TYPES.iter());
+-                source.set_selection(seat.primary_device.as_ref().unwrap(), seat.latest_serial);
++                source.set_selection(device, seat.latest_serial);
+                 self.primary_sources.push(source);
+             },
+         }
+-
+-        Some(())
++        Ok(())
+     }
+ 
+     /// Load selection for the given target.
+@@ -195,42 +207,48 @@ impl State {
+ 
+         let mut reader_buffer = [0; 4096];
+         let mut content = Vec::new();
+-        let _ = self.loop_handle.insert_source(read_pipe, move |_, file, state| {
+-            let file = unsafe { file.get_mut() };
+-            loop {
+-                match file.read(&mut reader_buffer) {
+-                    Ok(0) => {
+-                        let utf8 = String::from_utf8_lossy(&content);
+-                        let content = match utf8 {
+-                            Cow::Borrowed(_) => {
+-                                // Don't clone the read data.
+-                                let mut to_send = Vec::new();
+-                                mem::swap(&mut content, &mut to_send);
+-                                String::from_utf8(to_send).unwrap()
+-                            },
+-                            Cow::Owned(content) => content,
+-                        };
+-
+-                        // Post-process the content according to mime type.
+-                        let content = match mime_type {
+-                            MimeType::TextPlainUtf8 | MimeType::TextPlain => {
+-                                normalize_to_lf(content)
+-                            },
+-                            MimeType::Utf8String => content,
+-                        };
+-
+-                        let _ = state.reply_tx.send(Ok(content));
+-                        break PostAction::Remove;
+-                    },
+-                    Ok(n) => content.extend_from_slice(&reader_buffer[..n]),
+-                    Err(err) if err.kind() == ErrorKind::WouldBlock => break PostAction::Continue,
+-                    Err(err) => {
+-                        let _ = state.reply_tx.send(Err(err));
+-                        break PostAction::Remove;
+-                    },
+-                };
+-            }
+-        });
++        self.loop_handle
++            .insert_source(read_pipe, move |_, file, state| {
++                let file = unsafe { file.get_mut() };
++                loop {
++                    match file.read(&mut reader_buffer) {
++                        Ok(0) => {
++                            let utf8 = String::from_utf8_lossy(&content);
++                            let content = match utf8 {
++                                Cow::Borrowed(_) => {
++                                    // Don't clone the read data.
++                                    let mut to_send = Vec::new();
++                                    mem::swap(&mut content, &mut to_send);
++                                    String::from_utf8(to_send).unwrap()
++                                },
++                                Cow::Owned(content) => content,
++                            };
++
++                            // Post-process the content according to mime type.
++                            let content = match mime_type {
++                                MimeType::TextPlainUtf8 | MimeType::TextPlain => {
++                                    normalize_to_lf(content)
++                                },
++                                MimeType::Utf8String => content,
++                            };
++
++                            let _ = state.reply_tx.send(Ok(content));
++                            break PostAction::Remove;
++                        },
++                        Ok(n) => content.extend_from_slice(&reader_buffer[..n]),
++                        Err(err) if err.kind() == ErrorKind::WouldBlock => {
++                            break PostAction::Continue
++                        },
++                        Err(err) => {
++                            let _ = state.reply_tx.send(Err(err));
++                            break PostAction::Remove;
++                        },
++                    };
++                }
++            })
++            .map_err(|error| {
++                Error::other(format!("clipboard read source registration failed: {error}"))
++            })?;
+ 
+         Ok(())
+     }
+@@ -246,8 +264,8 @@ impl State {
+             return;
+         }
+ 
+-        // Don't access the content on the state directly, since it could change during
+-        // the send.
++        // Don't access the content on the state directly, since it could change
++        // during the send.
+         let contents = match ty {
+             SelectionTarget::Clipboard => self.data_selection_content.clone(),
+             SelectionTarget::Primary => self.primary_selection_content.clone(),
+@@ -293,8 +311,8 @@ impl SeatHandler for State {
+             Capability::Keyboard => {
+                 seat_state.keyboard = Some(seat.get_keyboard(qh, seat.id()));
+ 
+-                // Selection sources are tied to the keyboard, so add/remove decives
+-                // when we gain/loss capability.
++                // Selection sources are tied to the keyboard, so add/remove
++                // decives when we gain/loss capability.
+ 
+                 if seat_state.data_device.is_none() && self.data_device_manager_state.is_some() {
+                     seat_state.data_device = self
+diff --git a/src/worker.rs b/src/worker.rs
+index 4906495..c8116ca 100644
+--- a/src/worker.rs
++++ b/src/worker.rs
+@@ -1,11 +1,11 @@
+ use std::io::{Error, Result};
+-use std::sync::mpsc::Sender;
++use std::sync::mpsc::{Sender, SyncSender};
+ 
+ use sctk::reexports::calloop::channel::Channel;
+-use sctk::reexports::calloop::{EventLoop, channel};
++use sctk::reexports::calloop::{channel, EventLoop};
+ use sctk::reexports::calloop_wayland_source::WaylandSource;
+-use sctk::reexports::client::Connection;
+ use sctk::reexports::client::globals::registry_queue_init;
++use sctk::reexports::client::Connection;
+ 
+ use crate::state::{SelectionTarget, State};
+ 
+@@ -16,22 +16,21 @@ pub fn spawn(
+     display: Connection,
+     rx_chan: Channel<Command>,
+     worker_replier: Sender<Result<String>>,
+-) -> Option<std::thread::JoinHandle<()>> {
+-    std::thread::Builder::new()
+-        .name(name)
+-        .spawn(move || {
+-            worker_impl(display, rx_chan, worker_replier);
+-        })
+-        .ok()
++    ready: SyncSender<Result<()>>,
++) -> Result<std::thread::JoinHandle<()>> {
++    std::thread::Builder::new().name(name).spawn(move || {
++        if let Err(error) = worker_impl(display, rx_chan, worker_replier, &ready) {
++            let _ = ready.send(Err(error));
++        }
++    })
+ }
+ 
+ /// Clipboard worker thread command.
+-#[derive(Eq, PartialEq)]
+ pub enum Command {
+     /// Store data to a clipboard.
+-    Store(String),
++    Store(String, Sender<Result<()>>),
+     /// Store data to a primary selection.
+-    StorePrimary(String),
++    StorePrimary(String, Sender<Result<()>>),
+     /// Load data from a clipboard.
+     Load,
+     /// Load primary selection.
+@@ -45,37 +44,35 @@ fn worker_impl(
+     connection: Connection,
+     rx_chan: Channel<Command>,
+     reply_tx: Sender<Result<String>>,
+-) {
+-    let (globals, event_queue) = match registry_queue_init(&connection) {
+-        Ok(data) => data,
+-        Err(_) => return,
+-    };
+-
+-    let mut event_loop = EventLoop::<State>::try_new().unwrap();
++    ready: &SyncSender<Result<()>>,
++) -> Result<()> {
++    let (globals, event_queue) = registry_queue_init(&connection).map_err(|error| {
++        Error::other(format!("clipboard registry initialization failed: {error}"))
++    })?;
++    let mut event_loop = EventLoop::<State>::try_new()
++        .map_err(|error| Error::other(format!("clipboard event loop creation failed: {error}")))?;
+     let loop_handle = event_loop.handle();
+-
+-    let mut state = match State::new(&globals, &event_queue.handle(), loop_handle.clone(), reply_tx)
+-    {
+-        Some(state) => state,
+-        None => return,
+-    };
++    let mut state = State::new(&globals, &event_queue.handle(), loop_handle.clone(), reply_tx)
++        .ok_or_else(|| Error::other("compositor exposes no clipboard selection protocol"))?;
+ 
+     loop_handle
+         .insert_source(rx_chan, |event, _, state| {
+             if let channel::Event::Msg(event) = event {
+                 match event {
+-                    Command::StorePrimary(contents) => {
+-                        state.store_selection(SelectionTarget::Primary, contents);
++                    Command::StorePrimary(contents, reply) => {
++                        let _ =
++                            reply.send(state.store_selection(SelectionTarget::Primary, contents));
+                     },
+-                    Command::Store(contents) => {
+-                        state.store_selection(SelectionTarget::Clipboard, contents);
++                    Command::Store(contents, reply) => {
++                        let _ =
++                            reply.send(state.store_selection(SelectionTarget::Clipboard, contents));
+                     },
+                     Command::Load if state.data_device_manager_state.is_some() => {
+                         if let Err(err) = state.load_selection(SelectionTarget::Clipboard) {
+                             let _ = state.reply_tx.send(Err(err));
+                         }
+                     },
+-                    Command::LoadPrimary if state.data_device_manager_state.is_some() => {
++                    Command::LoadPrimary if state.primary_selection_manager_state.is_some() => {
+                         if let Err(err) = state.load_selection(SelectionTarget::Primary) {
+                             let _ = state.reply_tx.send(Err(err));
+                         }
+@@ -89,13 +86,19 @@ fn worker_impl(
+                 }
+             }
+         })
+-        .unwrap();
+-
+-    WaylandSource::new(connection, event_queue).insert(loop_handle).unwrap();
+-
+-    loop {
+-        if event_loop.dispatch(None, &mut state).is_err() || state.exit {
+-            break;
+-        }
++        .map_err(|error| {
++            Error::other(format!("clipboard command source registration failed: {error}"))
++        })?;
++    WaylandSource::new(connection, event_queue).insert(loop_handle).map_err(|error| {
++        Error::other(format!("clipboard event queue registration failed: {error}"))
++    })?;
++    ready
++        .send(Ok(()))
++        .map_err(|_| Error::other("clipboard owner dropped during initialization"))?;
++    while !state.exit {
++        event_loop
++            .dispatch(None, &mut state)
++            .map_err(|error| Error::other(format!("clipboard dispatch failed: {error}")))?;
+     }
++    Ok(())
+ }

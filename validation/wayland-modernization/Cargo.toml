@@ -1,0 +1,21 @@
+[package]
+name = "wayland-ownership-validation"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+resolver = "2"
+exclude = ["winit", "ui-events-winit", "smithay-clipboard", "wayland-backend"]
+
+[dependencies]
+winit = { path = "winit", default-features = false, features = ["x11", "wayland", "wayland-dlopen", "rwh_06"] }
+ui-events-winit = { path = "ui-events-winit", default-features = false }
+smithay-clipboard = { path = "smithay-clipboard", default-features = false, features = ["dlopen"] }
+
+[patch.crates-io]
+winit = { path = "winit" }
+wayland-backend = { path = "wayland-backend" }
+
+[lib]
+path = "smoke.rs"
