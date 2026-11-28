@@ -133,9 +133,7 @@ impl ScenePreparer {
                     ImageSource::ExternalTexture {
                         id, source_region, ..
                     } => encode_external_texture(*id, img, *source_region)?,
-                    ImageSource::Pixmap(_) => {
-                        panic!("pixmap image sources are not supported by Vello GPU")
-                    }
+                    ImageSource::Pixmap(_) => return Err(RenderError::UnresolvedPixmap),
                 },
                 EncodedPaint::Gradient(gradient) => {
                     let (gradient_start, gradient_width) =

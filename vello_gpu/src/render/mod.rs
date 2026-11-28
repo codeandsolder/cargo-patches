@@ -30,7 +30,7 @@ pub use webgl::{
     probe::{WebGlPendingProbe, WebGlProbeError, WebGlProbeStatus},
 };
 #[cfg(all(feature = "wgpu", feature = "text", feature = "full_image_support"))]
-pub use wgpu::{PrepareOutlineGlyphsError, PreparedOutlineGlyphs};
+pub use wgpu::{OutlineGlyphStyle, PrepareOutlineGlyphsError, PreparedOutlineGlyphs};
 #[cfg(feature = "wgpu")]
 pub use wgpu::{
     RenderOptions, RenderTarget, RenderTargetConfig, Renderer, TextureBinding, TextureBindings,

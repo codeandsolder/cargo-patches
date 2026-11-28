@@ -77,10 +77,19 @@ pub(crate) struct HybridImageUploadSession<'a> {
 impl HybridImageUploadSession<'_> {
     pub(crate) fn resolve_image(&mut self, data: &ImageData) -> Result<Arc<ImageTexture>, Error> {
         let key = ImageKey::derive(data);
-        if let Some((image, _)) = self.pending.iter().find(|(image, _)| image.key == key) {
+        if let Some((image, _)) = self
+            .pending
+            .iter()
+            .find(|(image, _)| image.key == Some(key))
+        {
             return Ok(Arc::clone(&image.texture));
         }
-        if let Some(index) = self.registry.live.iter().position(|image| image.key == key) {
+        if let Some(index) = self
+            .registry
+            .live
+            .iter()
+            .position(|image| image.key == Some(key))
+        {
             let image = self.registry.live.remove(index).unwrap();
             let texture = Arc::clone(&image.texture);
             self.registry.live.push_back(image);
@@ -105,11 +114,42 @@ impl HybridImageUploadSession<'_> {
         let ImageSource::Pixmap(pixmap) = ImageSource::from_peniko_image_data(data) else {
             unreachable!("peniko image conversion always produces a pixmap");
         };
+        self.queue_pixmap(pixmap, Some(key))
+    }
+
+    // Decoded font bitmaps have no persistent Blob identity. Deduplicate
+    // shared Arc instances within a recording; retain the resulting textures
+    // in the scene, without accumulating transient pixel buffers in the cache.
+    pub(crate) fn resolve_pixmap(
+        &mut self,
+        pixmap: &Arc<Pixmap>,
+    ) -> Result<Arc<ImageTexture>, Error> {
+        if let Some((image, _)) = self
+            .pending
+            .iter()
+            .find(|(_, pixels)| Arc::ptr_eq(pixels, pixmap))
+        {
+            return Ok(Arc::clone(&image.texture));
+        }
+        self.queue_pixmap(Arc::clone(pixmap), None)
+    }
+
+    fn queue_pixmap(
+        &mut self,
+        pixmap: Arc<Pixmap>,
+        key: Option<ImageKey>,
+    ) -> Result<Arc<ImageTexture>, Error> {
+        let width = u32::from(pixmap.width());
+        let height = u32::from(pixmap.height());
+        let limit = self.device.limits().max_texture_dimension_2d;
+        if width == 0 || height == 0 || width > limit || height > limit {
+            return Err(Error::UnsupportedImageBrush);
+        }
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("imaging_vello_hybrid inline image"),
+            label: Some("imaging_vello_hybrid image"),
             size: wgpu::Extent3d {
-                width: data.width,
-                height: data.height,
+                width,
+                height,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -127,7 +167,7 @@ impl HybridImageUploadSession<'_> {
             RegisteredImage {
                 key,
                 texture: Arc::clone(&texture),
-                bytes: u64::from(data.width) * u64::from(data.height) * 4,
+                bytes: u64::from(width) * u64::from(height) * 4,
             },
             pixmap,
         ));
@@ -151,8 +191,10 @@ impl HybridImageUploadSession<'_> {
                 },
                 texture.size(),
             );
-            self.registry.bytes_used += image.bytes;
-            self.registry.live.push_back(image);
+            if image.key.is_some() {
+                self.registry.bytes_used += image.bytes;
+                self.registry.live.push_back(image);
+            }
         }
         self.queue.submit([]);
     }
@@ -160,7 +202,7 @@ impl HybridImageUploadSession<'_> {
 
 #[derive(Debug)]
 struct RegisteredImage {
-    key: ImageKey,
+    key: Option<ImageKey>,
     texture: Arc<ImageTexture>,
     bytes: u64,
 }

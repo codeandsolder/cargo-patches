@@ -242,7 +242,9 @@ use crate::wgpu_support::{
 
 pub use scene::VelloHybridScene;
 pub use scene_sink::VelloHybridSceneSink;
-pub use vello_gpu::{GlyphAtlasStats, PrepareOutlineGlyphsError, PreparedOutlineGlyphs};
+pub use vello_gpu::{
+    GlyphAtlasStats, OutlineGlyphStyle, PrepareOutlineGlyphsError, PreparedOutlineGlyphs,
+};
 
 /// Errors that can occur when rendering via Vello hybrid.
 #[derive(Debug)]
@@ -414,15 +416,13 @@ impl VelloHybridRenderer {
     pub fn prepare_outline_glyphs(
         &mut self,
         font: &peniko::FontData,
-        font_size: f32,
-        hint: bool,
+        style: OutlineGlyphStyle<'_>,
         glyph_ids: &[u32],
     ) -> Result<PreparedOutlineGlyphs, PrepareOutlineGlyphsError> {
         let result = self.state.renderer.prepare_outline_glyphs(
             &mut self.state.resources,
             font,
-            font_size,
-            hint,
+            style,
             glyph_ids,
         );
         if matches!(result, Err(PrepareOutlineGlyphsError::Render(_))) {

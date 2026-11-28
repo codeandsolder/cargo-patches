@@ -134,7 +134,7 @@ pub use render::{
     WebGlShaderProgramOperation, WebGlShaderStage, WebGlTextureBindings, WebGlTextureTarget,
 };
 #[cfg(all(feature = "wgpu", feature = "text", feature = "full_image_support"))]
-pub use render::{PrepareOutlineGlyphsError, PreparedOutlineGlyphs};
+pub use render::{OutlineGlyphStyle, PrepareOutlineGlyphsError, PreparedOutlineGlyphs};
 #[cfg(feature = "wgpu")]
 pub use render::{
     RenderOptions, RenderTarget, RenderTargetConfig, Renderer, TextureBinding, TextureBindings,
@@ -181,6 +181,9 @@ pub enum RenderError {
     /// A glyph paint referenced an atlas entry that does not exist.
     #[error("Missing atlas entry for {0:?}")]
     MissingAtlasEntry(ImageId),
+    /// An owned CPU bitmap was not uploaded before GPU rendering.
+    #[error("CPU bitmap paint must be resolved to a GPU texture before rendering")]
+    UnresolvedPixmap,
     /// An intermediate texture allocation failed.
     #[error(transparent)]
     IntermediateTexture(#[from] IntermediateTextureError),

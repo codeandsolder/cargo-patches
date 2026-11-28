@@ -15,6 +15,7 @@ use imaging::{
 };
 use kurbo::{Affine, Shape as _};
 use peniko::{Brush, ImageBrush, Style};
+use skrifa::{FontRef, MetadataProvider, raw::TableProvider};
 use std::sync::Arc;
 use vello_common::TextureId;
 use vello_common::filter_effects::{EdgeMode, Filter as VelloFilter, FilterPrimitive};
@@ -208,7 +209,16 @@ impl<'a> VelloHybridSceneSink<'a> {
         } else if !self.layer_stack.is_empty() {
             Err(Error::Internal("unbalanced layer stack"))
         } else {
-            Ok(())
+            // Uncached bitmap glyphs own pixels until this upload pass.
+            let upload = &mut self.image_upload;
+            let images = &mut self.images;
+            self.scene.resolve_pixmap_images(|pixmap| {
+                let binding = upload
+                    .as_mut()
+                    .ok_or(Error::UnsupportedImageBrush)?
+                    .resolve_pixmap(pixmap)?;
+                Ok(Self::retain_texture_id(images, binding))
+            })
         };
 
         if result.is_err() {
@@ -282,19 +292,22 @@ impl<'a> VelloHybridSceneSink<'a> {
 
     fn retain_texture(&mut self, binding: Arc<ImageTexture>) -> ImageSource {
         let may_have_transparency = binding.may_have_transparency;
-        let index = self
-            .images
+        let id = Self::retain_texture_id(self.images, binding);
+        ImageSource::external_texture(id, TextureRegion::Full, may_have_transparency)
+    }
+
+    fn retain_texture_id(
+        images: &mut Vec<Arc<ImageTexture>>,
+        binding: Arc<ImageTexture>,
+    ) -> TextureId {
+        let index = images
             .iter()
             .position(|held| Arc::ptr_eq(held, &binding))
             .unwrap_or_else(|| {
-                self.images.push(binding);
-                self.images.len() - 1
+                images.push(binding);
+                images.len() - 1
             });
-        ImageSource::external_texture(
-            TextureId(index as u64),
-            TextureRegion::Full,
-            may_have_transparency,
-        )
+        TextureId(index as u64)
     }
 
     fn geometry_to_path(&self, geom: GeometryRef<'_>) -> kurbo::BezPath {
@@ -339,24 +352,70 @@ impl<'a> VelloHybridSceneSink<'a> {
             self.set_error_once(Error::UnsupportedGlyphBlend);
             return;
         }
-        let Some(paint) = self.brush_to_paint(glyph_run.brush, glyph_run.composite) else {
-            return;
-        };
+        // Palette and bitmap color are independent of brush alpha. Isolate
+        // each glyph when composing a color-capable run with non-default
+        // alpha or blending; preserve overlap order and full-color cache data.
+        let isolate = glyph_run.composite != Composite::default()
+            && FontRef::from_index(glyph_run.font.data.as_ref(), glyph_run.font.index)
+                .is_ok_and(|font| font.colr().is_ok() || font.bitmap_strikes().format().is_some());
+        if isolate {
+            let Some(paint) = self.brush_to_paint(glyph_run.brush, Composite::default()) else {
+                return;
+            };
+            for glyph in glyphs {
+                self.scene.set_blend_mode(peniko::BlendMode::default());
+                self.scene.push_layer(
+                    None,
+                    Some(glyph_run.composite.blend),
+                    Some(glyph_run.composite.alpha),
+                    None,
+                    None,
+                );
+                self.draw_prepared_glyphs(
+                    &glyph_run,
+                    paint.clone(),
+                    peniko::BlendMode::default(),
+                    core::iter::once(VelloGlyph {
+                        id: glyph.id,
+                        x: glyph.x,
+                        y: glyph.y,
+                    }),
+                );
+                self.scene.pop_layer();
+            }
+        } else {
+            let Some(paint) = self.brush_to_paint(glyph_run.brush, glyph_run.composite) else {
+                return;
+            };
+            // Glifo requires a cloneable glyph source.
+            let glyphs = glyphs
+                .map(|glyph| VelloGlyph {
+                    id: glyph.id,
+                    x: glyph.x,
+                    y: glyph.y,
+                })
+                .collect::<Vec<_>>();
+            self.draw_prepared_glyphs(
+                &glyph_run,
+                paint,
+                glyph_run.composite.blend,
+                glyphs.into_iter(),
+            );
+        }
+    }
+
+    fn draw_prepared_glyphs(
+        &mut self,
+        glyph_run: &GlyphRunRef<'_>,
+        paint: PaintType,
+        blend: peniko::BlendMode,
+        glyphs: impl Iterator<Item = VelloGlyph> + Clone,
+    ) {
         self.scene.set_transform(glyph_run.transform);
         self.scene
             .set_paint_transform(glyph_run.brush_transform.unwrap_or(Affine::IDENTITY));
-        self.scene.set_blend_mode(glyph_run.composite.blend);
+        self.scene.set_blend_mode(blend);
         self.scene.set_paint(paint);
-        // TODO: Revisit this allocation. `PaintSink` currently gives us a
-        // one-shot iterator, while glifo's glyph builders need a cloneable
-        // glyph source.
-        let glyphs = glyphs
-            .map(|glyph| VelloGlyph {
-                id: glyph.id,
-                x: glyph.x,
-                y: glyph.y,
-            })
-            .collect::<Vec<_>>();
 
         match glyph_run.style {
             Style::Fill(fill) => self.scene.set_fill_rule(*fill),
@@ -384,8 +443,8 @@ impl<'a> VelloHybridSceneSink<'a> {
                     builder
                 };
                 match glyph_run.style {
-                    Style::Fill(_) => builder.fill_glyphs(glyphs.into_iter()),
-                    Style::Stroke(_) => builder.stroke_glyphs(glyphs.into_iter()),
+                    Style::Fill(_) => builder.fill_glyphs(glyphs),
+                    Style::Stroke(_) => builder.stroke_glyphs(glyphs),
                 }
             }
             SceneSinkResources::Owned(cache) => {
@@ -411,8 +470,8 @@ impl<'a> VelloHybridSceneSink<'a> {
                     builder
                 };
                 match glyph_run.style {
-                    Style::Fill(_) => builder.fill_glyphs(glyphs.into_iter()),
-                    Style::Stroke(_) => builder.stroke_glyphs(glyphs.into_iter()),
+                    Style::Fill(_) => builder.fill_glyphs(glyphs),
+                    Style::Stroke(_) => builder.stroke_glyphs(glyphs),
                 }
             }
         };

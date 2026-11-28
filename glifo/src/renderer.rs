@@ -60,7 +60,9 @@ pub(crate) fn fill_glyph(
                     paint_transform,
                 );
             }
-            GlyphType::Bitmap(glyph) => render_uncached_bitmap_glyph(renderer, glyph, transform),
+            GlyphType::Bitmap(glyph) => {
+                render_uncached_bitmap_glyph(renderer, glyph, transform, paint_transform)
+            }
             GlyphType::Colr(glyph) => {
                 let context_color = renderer.get_context_color();
                 render_uncached_colr_glyph(
@@ -109,6 +111,7 @@ pub(crate) fn fill_glyph(
                     renderer,
                     &glyph,
                     transform,
+                    paint_transform,
                     key,
                     glyph_atlas,
                     image_cache,
@@ -117,7 +120,7 @@ pub(crate) fn fill_glyph(
                 return;
             }
 
-            render_uncached_bitmap_glyph(renderer, glyph, transform);
+            render_uncached_bitmap_glyph(renderer, glyph, transform, paint_transform);
         }
         GlyphType::Colr(glyph) => {
             if let Some(key) = cache_key.take()
@@ -234,9 +237,33 @@ fn render_uncached_bitmap_glyph(
     renderer: &mut impl GlyphRenderer,
     glyph: GlyphBitmap,
     outline_transform: Affine,
+    paint_transform: Affine,
+) {
+    render_bitmap(
+        renderer,
+        ImageSource::Pixmap(glyph.pixmap),
+        Affine::IDENTITY,
+        outline_transform,
+        paint_transform,
+        glyph.area,
+        glyph.mask,
+    );
+}
+
+// Bitmap color is intrinsic. Monochrome strikes instead carry coverage;
+// a solid brush uses the fast tint path, and an arbitrary brush is clipped
+// by the same coverage using an isolated destination-in composition.
+fn render_bitmap(
+    renderer: &mut impl GlyphRenderer,
+    source: ImageSource,
+    image_transform: Affine,
+    transform: Affine,
+    paint_transform: Affine,
+    area: Rect,
+    mask: bool,
 ) {
     let image = Image {
-        image: ImageSource::Pixmap(glyph.pixmap),
+        image: source,
         sampler: ImageSampler {
             x_extend: Extend::Pad,
             y_extend: Extend::Pad,
@@ -244,11 +271,35 @@ fn render_uncached_bitmap_glyph(
             alpha: 1.0,
         },
     };
-
+    let tint = if mask {
+        match renderer.current_paint() {
+            vello_common::paint::PaintType::Solid(color) => Some(Tint {
+                color: *color,
+                mode: TintMode::AlphaMask,
+            }),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let complex_mask = mask && tint.is_none();
     let state = renderer.save_state();
-    renderer.set_transform(outline_transform);
+    renderer.set_transform(transform);
+    if complex_mask {
+        renderer.push_clip_layer(&area.to_path(0.1));
+        renderer.set_paint_transform(paint_transform);
+        renderer.fill_rect(&area);
+        renderer.push_blend_layer(peniko::Compose::DestIn.into());
+    }
+    renderer.set_tint(tint);
     renderer.set_paint_image(image);
-    renderer.fill_rect(&glyph.area);
+    renderer.set_paint_transform(image_transform);
+    renderer.fill_rect(&area);
+    renderer.set_tint(None);
+    if complex_mask {
+        renderer.pop_layer();
+        renderer.pop_layer();
+    }
     renderer.restore_state(state);
 }
 
@@ -292,14 +343,21 @@ pub(crate) fn render_cached_glyph(
     cached_slot: AtlasSlot,
     transform: Affine,
     glyph_type: CachedGlyphType,
+    paint_transform: Affine,
 ) {
     match glyph_type {
         CachedGlyphType::Outline => {
             let tint = renderer.get_context_color();
             render_outline_glyph_from_atlas(renderer, cached_slot, transform, tint);
         }
-        CachedGlyphType::Bitmap => {
-            render_bitmap_glyph_from_atlas(renderer, cached_slot, transform);
+        CachedGlyphType::Bitmap | CachedGlyphType::BitmapMask => {
+            render_bitmap_glyph_from_atlas(
+                renderer,
+                cached_slot,
+                transform,
+                paint_transform,
+                matches!(glyph_type, CachedGlyphType::BitmapMask),
+            );
         }
         CachedGlyphType::Colr(area) => {
             render_colr_glyph_from_atlas(renderer, cached_slot, transform, area);
@@ -433,6 +491,7 @@ fn insert_and_render_bitmap(
     renderer: &mut impl GlyphRenderer,
     glyph: &GlyphBitmap,
     transform: Affine,
+    paint_transform: Affine,
     cache_key: GlyphCacheKey,
     glyph_atlas: &mut GlyphAtlas,
     image_cache: &mut ImageCache,
@@ -461,14 +520,7 @@ fn insert_and_render_bitmap(
     // the render pass that resolves image references.
     glyph_atlas.push_pending_upload(atlas_slot.image_id, Arc::clone(&glyph.pixmap), atlas_slot);
 
-    render_from_atlas(
-        renderer,
-        atlas_slot,
-        transform,
-        glyph.area,
-        ImageQuality::Medium,
-        None,
-    );
+    render_bitmap_glyph_from_atlas(renderer, atlas_slot, transform, paint_transform, glyph.mask);
     CacheResult::CachedAndRendered
 }
 
@@ -549,15 +601,25 @@ fn render_bitmap_glyph_from_atlas(
     renderer: &mut impl GlyphRenderer,
     atlas_slot: AtlasSlot,
     transform: Affine,
+    paint_transform: Affine,
+    mask: bool,
 ) {
-    let area = Rect::new(0.0, 0.0, atlas_slot.width as f64, atlas_slot.height as f64);
-    render_from_atlas(
+    let area = Rect::new(
+        0.0,
+        0.0,
+        f64::from(atlas_slot.width),
+        f64::from(atlas_slot.height),
+    );
+    let image_transform = renderer.atlas_paint_transform(&atlas_slot);
+    let source = renderer.atlas_image_source(&atlas_slot);
+    render_bitmap(
         renderer,
-        atlas_slot,
+        source,
+        image_transform,
         transform,
+        paint_transform,
         area,
-        ImageQuality::Medium,
-        None,
+        mask,
     );
 }
 
@@ -664,7 +726,7 @@ pub(crate) fn supports_atlas_caching(transform: &Affine, glyph_type: CachedGlyph
         // For bitmap glyphs, we need to relax the condition a bit, since bitmap glyphs already have a fixed
         // size and thus might not correspond 100% to the font size. Therefore, they likely don't have a unit
         // transform.
-        CachedGlyphType::Bitmap => {
+        CachedGlyphType::Bitmap | CachedGlyphType::BitmapMask => {
             !transform.has_skew() && a.is_sign_positive() && d.is_sign_positive()
         }
     }

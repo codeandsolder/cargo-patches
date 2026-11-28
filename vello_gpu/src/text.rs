@@ -113,14 +113,11 @@ impl Resources {
             render_to_atlas(backend, glyph_renderer, atlas_count, atlas_config, atlas_id)
         })?;
 
-        const PADDING: u16 = GLYPH_PADDING;
-
         if let Some(glyph_resources) = self.glyph_resources.as_mut() {
             // TODO: An upload error drops all remaining pending uploads.
             for upload in glyph_resources.glyph_atlas.drain_pending_uploads() {
-                let resource = self.image_cache.get(upload.image_id).unwrap();
-                let dst_x = resource.offset[0] + PADDING;
-                let dst_y = resource.offset[1] + PADDING;
+                let dst_x = upload.atlas_slot.x;
+                let dst_y = upload.atlas_slot.y;
                 upload_to_atlas(backend, &self.image_cache, &upload, dst_x, dst_y)?;
             }
         }

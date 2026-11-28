@@ -99,7 +99,7 @@ pub enum GlyphSkipReason {
     PngSupportDisabled,
     /// The glyph has bitmap data in a format that is not supported.
     UnsupportedBitmapFormat,
-    /// The glyph's PNG bitmap data could not be decoded.
+    /// The glyph's bitmap data could not be decoded.
     BitmapDecodeFailed,
     /// No renderable color, bitmap, or outline representation was found.
     NoRenderableRepresentation,
@@ -188,6 +188,8 @@ pub(crate) enum CachedGlyphType {
     Outline,
     /// A bitmap glyph cached in the atlas.
     Bitmap,
+    /// A monochrome bitmap coverage mask cached in the atlas.
+    BitmapMask,
     /// A COLR glyph cached in the atlas.
     /// The `Rect` parameter contains the fractional area dimensions
     /// to preserve sub-pixel accuracy during rendering.
@@ -229,6 +231,8 @@ pub(crate) struct GlyphOutline {
 pub(crate) struct GlyphBitmap {
     /// The pixmap of the glyph.
     pub(crate) pixmap: Arc<Pixmap>,
+    /// Whether the pixels represent monochrome coverage rather than intrinsic color.
+    pub(crate) mask: bool,
     /// The rectangular area that should be filled with the bitmap when painting.
     pub(crate) area: Rect,
 }
@@ -536,6 +540,7 @@ impl<'a, 'b, Glyphs: Iterator<Item = Glyph> + Clone> GlyphRunRenderer<'a, 'b, Gl
                     cached_slot,
                     outline_transform,
                     CachedGlyphType::Outline,
+                    Affine::IDENTITY,
                 );
                 continue;
             }
@@ -595,6 +600,7 @@ impl<'a, 'b, Glyphs: Iterator<Item = Glyph> + Clone> GlyphRunRenderer<'a, 'b, Gl
                         cached_slot,
                         outline_transform,
                         CachedGlyphType::Colr(area),
+                        Affine::IDENTITY,
                     );
                     continue;
                 }
@@ -659,6 +665,12 @@ impl<'a, 'b, Glyphs: Iterator<Item = Glyph> + Clone> GlyphRunRenderer<'a, 'b, Gl
             });
 
             if let Some((bitmap_glyph, cache_key)) = bitmap_data {
+                let mask = matches!(&bitmap_glyph.data, BitmapData::Mask(_));
+                let kind = if mask {
+                    CachedGlyphType::BitmapMask
+                } else {
+                    CachedGlyphType::Bitmap
+                };
                 let transform_for_height = |height| {
                     calculate_bitmap_transform(
                         glyph,
@@ -673,7 +685,7 @@ impl<'a, 'b, Glyphs: Iterator<Item = Glyph> + Clone> GlyphRunRenderer<'a, 'b, Gl
                 if let Some(ref key) = cache_key
                     && crate::renderer::supports_atlas_caching(
                         &transform_for_height(bitmap_glyph.height),
-                        CachedGlyphType::Bitmap,
+                        kind,
                     )
                     && let Some(slot) = self.atlas_cacher.get(key)
                 {
@@ -681,33 +693,26 @@ impl<'a, 'b, Glyphs: Iterator<Item = Glyph> + Clone> GlyphRunRenderer<'a, 'b, Gl
                         renderer,
                         slot,
                         transform_for_height(u32::from(slot.height)),
-                        CachedGlyphType::Bitmap,
+                        kind,
+                        transform_for_height(u32::from(slot.height)).inverse()
+                            * scene_paint_transform,
                     );
                     continue;
                 }
 
-                let decoded: Result<Pixmap, GlyphSkipReason> = match bitmap_glyph.data {
-                    #[cfg(feature = "png")]
-                    BitmapData::Png(data) => match Pixmap::from_png(std::io::Cursor::new(data)) {
-                        Ok(pixmap) => Ok(pixmap),
-                        Err(_) => Err(GlyphSkipReason::BitmapDecodeFailed),
-                    },
-                    #[cfg(not(feature = "png"))]
-                    BitmapData::Png(_) => Err(GlyphSkipReason::PngSupportDisabled),
-                    BitmapData::Bgra(_) | BitmapData::Mask(_) => {
-                        Err(GlyphSkipReason::UnsupportedBitmapFormat)
-                    }
-                };
+                let decoded =
+                    decode_bitmap(&bitmap_glyph.data, bitmap_glyph.width, bitmap_glyph.height);
                 match decoded {
                     Ok(pixmap) => {
                         let outline_transform = transform_for_height(u32::from(pixmap.height()));
                         // Cache miss — wrap the decoded pixmap for rendering.
-                        let glyph_type = create_bitmap_glyph(pixmap);
+                        let glyph_type = create_bitmap_glyph(pixmap, mask);
 
                         let prepared_glyph = PreparedGlyph {
                             glyph_type,
                             outline_transform,
-                            relative_paint_transform: Affine::IDENTITY,
+                            relative_paint_transform: outline_transform.inverse()
+                                * scene_paint_transform,
                             cache_key,
                         };
                         match style {
@@ -1033,7 +1038,13 @@ impl<'a, B> GlyphRunBuilder<'a, B> {
 
     /// Set normalized variation coordinates for variable fonts.
     pub fn normalized_coords(mut self, coords: &'a [NormalizedCoord]) -> Self {
-        self.run.normalized_coords = bytemuck::cast_slice(coords);
+        // Unspecified axes are at their default value. Canonicalize trailing
+        // zeroes so explicit and implicit default instances share cache keys.
+        let len = coords
+            .iter()
+            .rposition(|&coord| coord != 0)
+            .map_or(0, |i| i + 1);
+        self.run.normalized_coords = bytemuck::cast_slice(&coords[..len]);
         self
     }
 }
@@ -1331,11 +1342,97 @@ fn calculate_outline_transform(
     Affine::new(final_transform)
 }
 
+// Bound the decoded allocation independently of the font's strike metadata.
+fn bitmap_dimensions(width: u32, height: u32) -> Result<(u16, u16), GlyphSkipReason> {
+    let width = u16::try_from(width).map_err(|_| GlyphSkipReason::BitmapDecodeFailed)?;
+    let height = u16::try_from(height).map_err(|_| GlyphSkipReason::BitmapDecodeFailed)?;
+    if width == 0 || height == 0 || u32::from(width) * u32::from(height) > 16 * 1024 * 1024 {
+        return Err(GlyphSkipReason::BitmapDecodeFailed);
+    }
+    Ok((width, height))
+}
+
+fn decode_bitmap(
+    data: &BitmapData<'_>,
+    width: u32,
+    height: u32,
+) -> Result<Pixmap, GlyphSkipReason> {
+    match data {
+        #[cfg(feature = "png")]
+        BitmapData::Png(bytes) => {
+            let mut decoder = png::Decoder::new(std::io::Cursor::new(*bytes));
+            let info = decoder
+                .read_header_info()
+                .map_err(|_| GlyphSkipReason::BitmapDecodeFailed)?;
+            bitmap_dimensions(info.width, info.height)?;
+            Pixmap::from_png(std::io::Cursor::new(*bytes))
+                .map_err(|_| GlyphSkipReason::BitmapDecodeFailed)
+        }
+        #[cfg(not(feature = "png"))]
+        BitmapData::Png(_) => Err(GlyphSkipReason::PngSupportDisabled),
+        BitmapData::Bgra(bytes) => {
+            let (width, height) = bitmap_dimensions(width, height)?;
+            let len = usize::from(width) * usize::from(height) * 4;
+            if bytes.len() != len {
+                return Err(GlyphSkipReason::BitmapDecodeFailed);
+            }
+            let mut pixmap = Pixmap::new(width, height);
+            for (dst, src) in pixmap.data_mut().iter_mut().zip(bytes.chunks_exact(4)) {
+                let a = src[3];
+                // BGRA font strikes are already premultiplied; reject invalid pixels.
+                if src[..3].iter().any(|&component| component > a) {
+                    return Err(GlyphSkipReason::BitmapDecodeFailed);
+                }
+                *dst = PremulRgba8 {
+                    r: src[2],
+                    g: src[1],
+                    b: src[0],
+                    a,
+                };
+            }
+            Ok(pixmap)
+        }
+        BitmapData::Mask(mask) => {
+            let (width, height) = bitmap_dimensions(width, height)?;
+            let bits = usize::from(mask.bpp);
+            if !matches!(bits, 1 | 2 | 4 | 8) {
+                return Err(GlyphSkipReason::UnsupportedBitmapFormat);
+            }
+            let row_bits = usize::from(width) * bits;
+            let bytes = if mask.is_packed {
+                (row_bits * usize::from(height)).div_ceil(8)
+            } else {
+                row_bits.div_ceil(8) * usize::from(height)
+            };
+            // Skrifa's row-aligned decoder iterates all supplied rows. Limit it
+            // to the declared dimensions, including when a font has padding.
+            let mut mask = mask.clone();
+            mask.data = mask
+                .data
+                .get(..bytes)
+                .ok_or(GlyphSkipReason::BitmapDecodeFailed)?;
+            let coverage = mask
+                .decode(u32::from(width), u32::from(height))
+                .map_err(|_| GlyphSkipReason::BitmapDecodeFailed)?;
+            let mut pixmap = Pixmap::new(width, height);
+            for (dst, a) in pixmap.data_mut().iter_mut().zip(coverage) {
+                *dst = PremulRgba8 {
+                    r: a,
+                    g: a,
+                    b: a,
+                    a,
+                };
+            }
+            Ok(pixmap)
+        }
+    }
+}
+
 /// Create bitmap glyph data.
 ///
 /// This wraps the pixmap in a `GlyphType::Bitmap` with its display area,
 /// without any positioning information.
-fn create_bitmap_glyph(pixmap: Pixmap) -> GlyphType<'static> {
+fn create_bitmap_glyph(pixmap: Pixmap, mask: bool) -> GlyphType<'static> {
     // Scale factor already accounts for ppem, so we can just draw in the size of the
     // actual image
     let area = Rect::new(
@@ -1347,6 +1444,7 @@ fn create_bitmap_glyph(pixmap: Pixmap) -> GlyphType<'static> {
 
     GlyphType::Bitmap(GlyphBitmap {
         pixmap: Arc::new(pixmap),
+        mask,
         area,
     })
 }

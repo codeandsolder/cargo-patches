@@ -320,6 +320,33 @@ impl Scene {
             .effective_paint_transform(self.transforms())
     }
 
+    /// Replace owned CPU bitmap paints with externally uploaded textures.
+    /// Existing texture and atlas paints are unchanged. The caller must retain
+    /// the returned texture identities for the lifetime of the scene.
+    /// # Errors
+    /// Returns an error from the upload callback; discard the scene on failure.
+    pub fn resolve_pixmap_images<E>(
+        &mut self,
+        mut upload: impl FnMut(
+            &alloc::sync::Arc<vello_common::pixmap::Pixmap>,
+        ) -> Result<vello_common::TextureId, E>,
+    ) -> Result<(), E> {
+        use vello_common::paint::{ImageSource, TextureRegion};
+        for paint in &mut self.encoded_paints {
+            if let EncodedPaint::Image(image) = paint
+                && let ImageSource::Pixmap(pixmap) = &image.source
+            {
+                let id = upload(pixmap)?;
+                image.source = ImageSource::external_texture(
+                    id,
+                    TextureRegion::Full,
+                    pixmap.may_have_transparency(),
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Encode the current paint into a `Paint` that can be used for rendering.
     ///
     /// For solid colors, this is a simple conversion. For gradients and images,

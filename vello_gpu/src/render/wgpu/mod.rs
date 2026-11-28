@@ -132,6 +132,18 @@ pub struct Renderer {
     atlas_clear_scratch: Vec<u8>,
 }
 
+/// Font rasterization settings shared by ordinary glyph runs and retained consumers.
+#[cfg(all(feature = "text", feature = "full_image_support"))]
+#[derive(Clone, Copy, Debug)]
+pub struct OutlineGlyphStyle<'a> {
+    /// Physical pixels per em.
+    pub font_size: f32,
+    /// Vertical hinting policy.
+    pub hint: bool,
+    /// Signed F2Dot14 normalized variation coordinates in font-axis order.
+    pub normalized_coords: &'a [i16],
+}
+
 /// Stable monochrome atlas slots and their GPU texture views.
 #[cfg(all(feature = "text", feature = "full_image_support"))]
 #[derive(Clone, Debug)]
@@ -365,11 +377,16 @@ impl Renderer {
         &mut self,
         resources: &mut Resources,
         font: &crate::peniko::FontData,
-        font_size: f32,
-        hint: bool,
+        style: OutlineGlyphStyle<'_>,
         glyph_ids: &[u32],
     ) -> Result<PreparedOutlineGlyphs, PrepareOutlineGlyphsError> {
-        if !font_size.is_finite() || font_size <= 0.0 {
+        if !style.font_size.is_finite()
+            || style.font_size <= 0.0
+            || style
+                .normalized_coords
+                .iter()
+                .any(|&c| !(-16384..=16384).contains(&c))
+        {
             return Err(PrepareOutlineGlyphsError::Unavailable);
         }
         resources.ensure_glyph_resources();
@@ -383,8 +400,9 @@ impl Renderer {
         scene.set_paint(crate::peniko::color::palette::css::BLACK);
         let result = scene
             .glyph_run(resources, font)
-            .font_size(font_size)
-            .hint(hint)
+            .font_size(style.font_size)
+            .hint(style.hint)
+            .normalized_coords(style.normalized_coords)
             .atlas_cache(true)
             .fill_glyphs(
                 glyph_ids

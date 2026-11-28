@@ -38,13 +38,10 @@ const EMPTY_VAR_MAP: FixedHashMap<VarKey, FixedHashMap<GlyphCacheKey, GlyphCache
 
 /// Padding in pixels added to each side of a glyph to prevent texture bleeding.
 ///
-/// The GPU renderer samples atlas sub-images via `Extend::Pad`, which
-/// clamps out-of-bounds coordinates to the edge texel. Without at least 1px of
-/// transparent padding, strip-rasteriser overshoot at glyph boundaries would
-/// either duplicate the edge row/column or bleed in content from a neighbouring
-/// glyph allocation. 1px is sufficient: the overshoot is sub-pixel, and the
-/// transparent padding absorbs it. This padding also enables a future switch to
-/// native bilinear sampling in the GPU renderer.
+/// Vector glyphs use transparent padding to absorb subpixel raster overshoot.
+/// Embedded bitmaps replicate their edge texels into this padding so bilinear
+/// sampling at a scaled strike boundary has the same Extend::Pad behavior as
+/// the original standalone image, without reading a neighboring atlas entry.
 pub const GLYPH_PADDING: u16 = 1;
 
 /// Configuration for glyph cache behavior.
@@ -82,9 +79,10 @@ pub struct PendingBitmapUpload {
     /// The image ID allocated in the shared `ImageCache`.
     /// Use `image_cache.get(image_id)` to obtain `atlas_id` and `offset`.
     pub image_id: ImageId,
-    /// The bitmap pixel data to upload.
+    /// The bitmap pixel data to upload, including edge-replicated padding.
     pub pixmap: Arc<Pixmap>,
-    /// The atlas slot information for this glyph (includes dimensions).
+    /// The upload rectangle, including padding. This is not the cached interior
+    /// rectangle returned by glyph lookup.
     pub atlas_slot: AtlasSlot,
 }
 
@@ -317,10 +315,37 @@ impl GlyphAtlas {
         pixmap: Arc<Pixmap>,
         atlas_slot: AtlasSlot,
     ) {
+        let pad = GLYPH_PADDING;
+        let width = atlas_slot.width + 2 * pad;
+        let height = atlas_slot.height + 2 * pad;
+        let mut padded = Pixmap::new(width, height);
+        let source_width = usize::from(atlas_slot.width);
+        let source_height = usize::from(atlas_slot.height);
+        let pad_usize = usize::from(pad);
+        // The allocation and source dimensions have already been checked
+        // during insertion. Replicate edges, preserving premultiplied bytes.
+        for (y, row) in padded
+            .data_mut()
+            .chunks_exact_mut(usize::from(width))
+            .enumerate()
+        {
+            let source_y = y.saturating_sub(pad_usize).min(source_height - 1);
+            let source = &pixmap.data()[source_y * source_width..(source_y + 1) * source_width];
+            row[..pad_usize].fill(source[0]);
+            row[pad_usize..pad_usize + source_width].copy_from_slice(source);
+            row[pad_usize + source_width..].fill(source[source_width - 1]);
+        }
+        padded.set_may_have_transparency(pixmap.may_have_transparency());
         self.pending_uploads.push(PendingBitmapUpload {
             image_id,
-            pixmap,
-            atlas_slot,
+            pixmap: Arc::new(padded),
+            atlas_slot: AtlasSlot {
+                x: atlas_slot.x - pad,
+                y: atlas_slot.y - pad,
+                width,
+                height,
+                ..atlas_slot
+            },
         });
     }
 
