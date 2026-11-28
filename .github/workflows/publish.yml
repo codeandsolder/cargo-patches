@@ -18,7 +18,7 @@ jobs:
         with:
           toolchain: nightly-2026-11-28
       - name: Install native validation tools
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends binutils ripgrep jq clang cmake
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends binutils ripgrep jq clang cmake mesa-vulkan-drivers libvulkan1
       - uses: codeandsolder/ci-workflows/.github/actions/setup-sccache@f22d2e61394d5b0b79314d24d16523eed509d496 # main
         with:
           rust-toolchain: nightly-2026-11-26

@@ -1,0 +1,281 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 7b31fcd..ee8d99f 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -133,6 +133,8 @@ pub use render::{
+     WebGlRendererInitStatus, WebGlResourceKind, WebGlShaderInterfaceOperation,
+     WebGlShaderProgramOperation, WebGlShaderStage, WebGlTextureBindings, WebGlTextureTarget,
+ };
++#[cfg(all(feature = "wgpu", feature = "text", feature = "full_image_support"))]
++pub use render::{PrepareOutlineGlyphsError, PreparedOutlineGlyphs};
+ #[cfg(feature = "wgpu")]
+ pub use render::{
+     RenderOptions, RenderTarget, RenderTargetConfig, Renderer, TextureBinding, TextureBindings,
+@@ -141,6 +143,8 @@ pub use render::{
+ pub use render::{WebGlPendingProbe, WebGlProbeError, WebGlProbeOperation, WebGlProbeStatus};
+ #[cfg(all(feature = "wgpu", feature = "probe"))]
+ pub use render::{WgpuPendingProbe, WgpuProbeError, WgpuProbeStatus};
++#[cfg(feature = "text")]
++pub use resources::GlyphAtlasStats;
+ pub use resources::Resources;
+ pub use scene::{LayersConfig, MemorySettings, RenderSettings, Scene};
+ #[cfg(feature = "text")]
+diff --git a/src/render/mod.rs b/src/render/mod.rs
+index 023f9b9..a3d667b 100644
+--- a/src/render/mod.rs
++++ b/src/render/mod.rs
+@@ -29,6 +29,8 @@ pub use webgl::{
+     WebGlProbeOperation,
+     probe::{WebGlPendingProbe, WebGlProbeError, WebGlProbeStatus},
+ };
++#[cfg(all(feature = "wgpu", feature = "text", feature = "full_image_support"))]
++pub use wgpu::{PrepareOutlineGlyphsError, PreparedOutlineGlyphs};
+ #[cfg(feature = "wgpu")]
+ pub use wgpu::{
+     RenderOptions, RenderTarget, RenderTargetConfig, Renderer, TextureBinding, TextureBindings,
+diff --git a/src/render/wgpu/mod.rs b/src/render/wgpu/mod.rs
+index d8b3233..26ec2a7 100644
+--- a/src/render/wgpu/mod.rs
++++ b/src/render/wgpu/mod.rs
+@@ -132,6 +132,43 @@ pub struct Renderer {
+     atlas_clear_scratch: Vec<u8>,
+ }
+ 
++/// Stable monochrome atlas slots and their GPU texture views.
++#[cfg(all(feature = "text", feature = "full_image_support"))]
++#[derive(Clone, Debug)]
++pub struct PreparedOutlineGlyphs {
++    _leases: Vec<glifo::atlas::GlyphAtlasLease>,
++    slots: Vec<glifo::atlas::AtlasSlot>,
++    pages: Vec<TextureView>,
++}
++
++#[cfg(all(feature = "text", feature = "full_image_support"))]
++impl PreparedOutlineGlyphs {
++    /// Slots in input glyph order, valid for the lifetime of this object.
++    pub fn slots(&self) -> impl ExactSizeIterator<Item = glifo::atlas::AtlasSlot> + '_ {
++        self.slots.iter().copied()
++    }
++
++    /// GPU atlas views, indexed by the slots' page indices.
++    pub fn pages(&self) -> &[TextureView] {
++        &self.pages
++    }
++}
++
++/// Failure to prepare a monochrome outline atlas subset.
++#[cfg(all(feature = "text", feature = "full_image_support"))]
++#[derive(Debug, thiserror::Error)]
++pub enum PrepareOutlineGlyphsError {
++    /// A glyph has no supported representation.
++    #[error("invalid glyph: {0}")]
++    Glyph(#[source] glifo::GlyphRenderError),
++    /// The glyph cannot be cached as a monochrome outline at the requested size.
++    #[error("outline atlas slot unavailable")]
++    Unavailable,
++    /// The GPU atlas update failed.
++    #[error("atlas rendering failed: {0}")]
++    Render(#[source] RenderError),
++}
++
+ impl Renderer {
+     /// Creates a new renderer and its persistent resources.
+     pub fn new(
+@@ -263,30 +300,7 @@ impl Renderer {
+         options: RenderOptions<'_>,
+     ) -> Result<(), RenderError> {
+         #[cfg(feature = "text")]
+-        {
+-            resources.before_render(
+-                self,
+-                |renderer, glyph_renderer, atlas_count, atlas_config, atlas_id| {
+-                    renderer.render_to_atlas(
+-                        glyph_renderer,
+-                        atlas_count,
+-                        atlas_config,
+-                        atlas_id,
+-                        texture_bindings,
+-                    )
+-                },
+-                |renderer, image_cache, upload, dst_x, dst_y| {
+-                    renderer.write_to_atlas(
+-                        image_cache,
+-                        upload.image_id,
+-                        &upload.pixmap,
+-                        [dst_x, dst_y],
+-                    );
+-
+-                    Ok(())
+-                },
+-            )?;
+-        }
++        self.flush_glyph_atlas(resources, texture_bindings)?;
+ 
+         let result = self.render_scene(
+             scene,
+@@ -310,6 +324,114 @@ impl Renderer {
+         result
+     }
+ 
++    #[cfg(feature = "text")]
++    fn flush_glyph_atlas(
++        &mut self,
++        resources: &mut Resources,
++        texture_bindings: &TextureBindings,
++    ) -> Result<(), RenderError> {
++        resources.before_render(
++            self,
++            |renderer, glyph_renderer, atlas_count, atlas_config, atlas_id| {
++                renderer.render_to_atlas(
++                    glyph_renderer,
++                    atlas_count,
++                    atlas_config,
++                    atlas_id,
++                    texture_bindings,
++                )
++            },
++            |renderer, image_cache, upload, dst_x, dst_y| {
++                renderer.write_to_atlas(
++                    image_cache,
++                    upload.image_id,
++                    &upload.pixmap,
++                    [dst_x, dst_y],
++                );
++
++                Ok(())
++            },
++        )
++    }
++
++    /// Prepare a subset of monochrome outline glyphs for external GPU drawing.
++    ///
++    /// Each glyph is resolved through the normal text cache at the given physical
++    /// size and hinting policy. The returned object pins its slots and retains the
++    /// sampled textures. No text layout or repeated glyph rasterization is needed
++    /// by the consumer after preflight.
++    #[cfg(all(feature = "text", feature = "full_image_support"))]
++    pub fn prepare_outline_glyphs(
++        &mut self,
++        resources: &mut Resources,
++        font: &crate::peniko::FontData,
++        font_size: f32,
++        hint: bool,
++        glyph_ids: &[u32],
++    ) -> Result<PreparedOutlineGlyphs, PrepareOutlineGlyphsError> {
++        if !font_size.is_finite() || font_size <= 0.0 {
++            return Err(PrepareOutlineGlyphsError::Unavailable);
++        }
++        resources.ensure_glyph_resources();
++        resources
++            .glyph_resources
++            .as_mut()
++            .unwrap()
++            .glyph_atlas
++            .begin_outline_lease_capture();
++        let mut scene = Scene::new(1, 1);
++        scene.set_paint(crate::peniko::color::palette::css::BLACK);
++        let result = scene
++            .glyph_run(resources, font)
++            .font_size(font_size)
++            .hint(hint)
++            .atlas_cache(true)
++            .fill_glyphs(
++                glyph_ids
++                    .iter()
++                    .copied()
++                    .map(|id| glifo::Glyph { id, x: 0.0, y: 0.0 }),
++            );
++        let leases = resources
++            .glyph_resources
++            .as_mut()
++            .unwrap()
++            .glyph_atlas
++            .take_outline_leases();
++        if let Err(error) = self.flush_glyph_atlas(resources, &TextureBindings::new()) {
++            self.reset_and_shrink(resources);
++            return Err(PrepareOutlineGlyphsError::Render(error));
++        }
++        result.map_err(PrepareOutlineGlyphsError::Glyph)?;
++        if leases.len() != glyph_ids.len() {
++            return Err(PrepareOutlineGlyphsError::Unavailable);
++        }
++        // A subset binds only the pages that contain its leased glyphs.
++        let mut pages = Vec::new();
++        let mut original_pages = Vec::new();
++        let mut slots = Vec::with_capacity(leases.len());
++        for lease in &leases {
++            let mut slot = lease.slot();
++            let index = if let Some(index) =
++                original_pages.iter().position(|&id| id == slot.page_index)
++            {
++                index
++            } else {
++                let index = pages.len();
++                original_pages.push(slot.page_index);
++                pages.push(self.resources.atlas_texture_views[slot.page_index as usize].clone());
++                index
++            };
++            slot.page_index = index as u32;
++            slots.push(slot);
++        }
++        Ok(PreparedOutlineGlyphs {
++            _leases: leases,
++            slots,
++            pages,
++        })
++    }
++
+     /// Render a `scene` directly into an atlas layer.
+     ///
+     /// This renders the scene's content into the specified atlas layer, which can then
+diff --git a/src/resources.rs b/src/resources.rs
+index f48cbe2..c8abeb9 100644
+--- a/src/resources.rs
++++ b/src/resources.rs
+@@ -22,7 +22,33 @@ pub struct Resources {
+     pub(crate) glyph_resources: Option<GlyphAtlasResources>,
+ }
+ 
++/// Current glyph atlas residency and cumulative cache activity.
++#[cfg(feature = "text")]
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct GlyphAtlasStats {
++    /// Resident glyph entries.
++    pub entries: usize,
++    /// Successful lookups.
++    pub hits: u64,
++    /// Unsuccessful lookups.
++    pub misses: u64,
++    /// Allocated texture pages.
++    pub pages: usize,
++}
++
+ impl Resources {
++    /// Glyph atlas activity, or None before the first cached glyph.
++    #[cfg(feature = "text")]
++    pub fn glyph_atlas_stats(&self) -> Option<GlyphAtlasStats> {
++        let atlas = &self.glyph_resources.as_ref()?.glyph_atlas;
++        Some(GlyphAtlasStats {
++            entries: atlas.len(),
++            hits: atlas.cache_hits(),
++            misses: atlas.cache_misses(),
++            pages: self.image_cache.atlas_count(),
++        })
++    }
++
+     pub(crate) fn new(glyph_atlas_config: AtlasConfig) -> Self {
+         Self {
+             image_cache: ImageCache::new_with_config(glyph_atlas_config),
+diff --git a/src/text.rs b/src/text.rs
+index b1d190b..2b28c49 100644
+--- a/src/text.rs
++++ b/src/text.rs
+@@ -52,7 +52,7 @@ impl GlyphAtlasResources {
+ }
+ 
+ impl Resources {
+-    fn ensure_glyph_resources(&mut self) {
++    pub(crate) fn ensure_glyph_resources(&mut self) {
+         if self.glyph_resources.is_none() {
+             let (atlas_width, atlas_height) = self.image_cache.atlas_manager().config().atlas_size;
+             // TODO: Use a config optionally provided by the user!
