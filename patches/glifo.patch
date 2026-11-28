@@ -342,7 +342,7 @@ index d9b5c29..72007ca 100644
  pub use commands::{AtlasCommand, AtlasCommandRecorder, AtlasPaint};
  pub use key::GlyphCacheKey;
 diff --git a/src/glyph.rs b/src/glyph.rs
-index b0bea9f..5862aca 100644
+index b0bea9f..3fbb15b 100644
 --- a/src/glyph.rs
 +++ b/src/glyph.rs
 @@ -504,15 +504,24 @@ impl<'a, 'b, Glyphs: Iterator<Item = Glyph> + Clone> GlyphRunRenderer<'a, 'b, Gl
@@ -503,7 +503,7 @@ index b0bea9f..5862aca 100644
 -                    outline_transform,
 -                    relative_paint_transform: Affine::IDENTITY,
 -                    cache_key,
-+                let decoded = match bitmap_glyph.data {
++                let decoded: Result<Pixmap, GlyphSkipReason> = match bitmap_glyph.data {
 +                    #[cfg(feature = "png")]
 +                    BitmapData::Png(data) => match Pixmap::from_png(std::io::Cursor::new(data)) {
 +                        Ok(pixmap) => Ok(pixmap),
