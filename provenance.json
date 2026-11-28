@@ -1,0 +1,11 @@
+{
+  "family": "worker-time",
+  "packages": [
+    {
+      "name": "worker",
+      "version": "0.9.0",
+      "checksum": "1d055db1ea6baa6c329730897f63ff7b6ac93c46a9f053804e497e5960eb98e3",
+      "patch": "patches/worker.patch"
+    }
+  ]
+}
