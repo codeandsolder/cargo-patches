@@ -1,19 +1,44 @@
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -44,10 +44,12 @@
+@@ -44,10 +44,16 @@
  cuda = ["oar-ocr-core/cuda"]
  default = [
      "download-binaries",
 +    "image-formats",
++    "formula-recognition",
++    "indra",
      "simd",
  ]
  directml = ["oar-ocr-core/directml"]
  download-binaries = ["oar-ocr-core/download-binaries"]
++formula-recognition = ["oar-ocr-core/formula-recognition"]
++indra = ["dep:zip", "dep:unicode-bidi"]
 +image-formats = ["image/default-formats", "oar-ocr-core/image-formats"]
  openvino = ["oar-ocr-core/openvino"]
  simd = ["oar-ocr-core/simd"]
  tensorrt = ["oar-ocr-core/tensorrt"]
-@@ -119,9 +121,13 @@
+@@ -72,10 +78,12 @@
+ [[example]]
+ name = "formula_recognition"
+ path = "examples/formula_recognition.rs"
++required-features = ["formula-recognition"]
+
+ [[example]]
+ name = "indra"
+ path = "examples/indra.rs"
++required-features = ["indra"]
+
+ [[example]]
+ name = "layout_detection"
+@@ -92,6 +100,7 @@
+ [[example]]
+ name = "structure"
+ path = "examples/structure.rs"
++required-features = ["formula-recognition"]
+
+ [[example]]
+ name = "table_cell_detection"
+@@ -119,9 +128,13 @@
 
  [dependencies.image]
  version = "0.25.10"
@@ -27,12 +52,655 @@
 
  [dependencies.nalgebra]
  version = "0.35"
-@@ -171,7 +177,7 @@
+@@ -160,6 +173,7 @@
+
+ [dependencies.unicode-bidi]
+ version = "0.3.18"
++optional = true
+
+ [dependencies.unicode-normalization]
+ version = "0.1.25"
+@@ -171,7 +185,8 @@
 
  [dependencies.zip]
  version = "9.5"
 -features = ["deflate-flate2"]
++optional = true
 +features = ["deflate-flate2-zlib-rs"]
  default-features = false
 
  [dev-dependencies.ab_glyph]
+--- a/src/indra/layout.rs
++++ b/src/indra/layout.rs
+@@ -2,7 +2,8 @@
+ //! a new block starts wherever the same-block logit between consecutive
+ //! lines is negative, and each block renders by its class.
+
+-use super::order::{BLOCK_CLASSES, Square, cluster, group_class, median_f32};
++use super::order::{BLOCK_CLASSES, Square, cluster, group_class};
++use crate::reading_helpers::{median_f32, median_f64};
+ use regex::Regex;
+ use std::sync::LazyLock;
+
+@@ -100,16 +101,6 @@
+         r.sort_by(|&a, &b| boxes[a][0].total_cmp(&boxes[b][0]));
+     }
+     rows
+-}
+-
+-pub(crate) fn median_f64(values: &mut [f64]) -> f64 {
+-    values.sort_by(f64::total_cmp);
+-    let n = values.len();
+-    if n % 2 == 1 {
+-        values[n / 2]
+-    } else {
+-        (values[n / 2 - 1] + values[n / 2]) / 2.0
+-    }
+ }
+
+ /// Joins the line rows of wrapped cells into one table row: a gap under half
+--- a/src/indra/mod.rs
++++ b/src/indra/mod.rs
+@@ -51,8 +51,7 @@
+ mod recognize;
+ mod rtl;
+
+-pub(crate) use layout::median_f64;
+-pub(crate) use order::{is_digit, median_f32};
++use crate::reading_helpers::median_f32;
+
+ use image::{GrayImage, RgbImage};
+ use oar_ocr_core::core::OCRError;
+@@ -723,7 +722,7 @@
+         let (mut boxes, mut scale) = self.detect_at(gray, self.long_side)?;
+         if boxes.len() >= 8 {
+             let mut heights: Vec<f32> = boxes.iter().map(|b| b[3] - b[1]).collect();
+-            let med_h = order::median_f32(&mut heights);
++            let med_h = median_f32(&mut heights);
+             if med_h < ADAPTIVE_MIN_H {
+                 let target = (self.long_side as f32 * ADAPTIVE_TARGET_H / med_h.max(1.0)) as f64;
+                 let ls = (target.min(ADAPTIVE_MAX_SIDE as f64) as usize) / 32 * 32;
+--- a/src/indra/order.rs
++++ b/src/indra/order.rs
+@@ -1,6 +1,8 @@
+ //! Reading order: the order model's line features, the decoding of its
+ //! pairwise logits, and the XY-cut and top-down baselines it falls back on
+ //! inside blocks.
++
++use crate::reading_helpers::{is_digit, median_f32};
+
+ /// Block classes of the order model's layout head.
+ pub(super) const BLOCK_CLASSES: [&str; 10] = [
+@@ -29,27 +31,6 @@
+     pub(super) fn at(&self, i: usize, j: usize) -> f32 {
+         self.data[i * self.n + j]
+     }
+-}
+-
+-/// Median as numpy computes it on float32 data.
+-pub(crate) fn median_f32(values: &mut [f32]) -> f32 {
+-    values.sort_by(f32::total_cmp);
+-    let n = values.len();
+-    if n % 2 == 1 {
+-        values[n / 2]
+-    } else {
+-        (values[n / 2 - 1] + values[n / 2]) / 2.0
+-    }
+-}
+-
+-/// Python's `str.isdigit` for one character, closely enough for features:
+-/// decimal and superscript-style digits, not fractions or numeral letters.
+-pub(crate) fn is_digit(c: char) -> bool {
+-    c.is_numeric()
+-        && !matches!(c,
+-            '\u{BC}'..='\u{BE}' | '\u{2150}'..='\u{218B}' | '\u{09F4}'..='\u{09F9}'
+-            | '\u{3007}' | '\u{3021}'..='\u{3029}' | '\u{3038}'..='\u{303A}'
+-            | '\u{4E00}'..='\u{9FFF}')
+ }
+
+ /// Characters that end a sentence, Latin and CJK.
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -21,7 +21,7 @@
+ //! - **Document Rectification**: Fix perspective distortion
+ //! - **Text Line Classification**: Detect text line orientation
+ //! - **Seal Text Detection**: Detect text in circular seals
+-//! - **Formula Recognition**: Recognize mathematical formulas
++//! - **Formula Recognition** (feature `formula-recognition`): Recognize mathematical formulas
+ //!
+ //! ## Modules
+ //!
+@@ -83,11 +83,6 @@
+ //!     .with_table_cell_detection("table_cell_detection.onnx", "wired")
+ //!     .with_table_structure_recognition("table_structure.onnx", "wired")
+ //!     .table_structure_dict_path("table_structure_dict.txt")
+-//!     .with_formula_recognition(
+-//!         "formula_recognition.onnx",
+-//!         "tokenizer.json",
+-//!         "pp_formulanet"
+-//!     )
+ //!     .build()?;
+ //!
+ //! // Analyze document structure
+@@ -140,6 +135,8 @@
+ pub mod oarocr;
+
+ // Indra OCR, Datalab's ONNX page reader (its own pipeline)
++mod reading_helpers;
++#[cfg(feature = "indra")]
+ pub mod indra;
+
+ // Re-export derive macros for convenient use
+--- a/src/oarocr/reading/geometry.rs
++++ b/src/oarocr/reading/geometry.rs
+@@ -13,7 +13,7 @@
+     if xs.is_empty() {
+         0.
+     } else {
+-        crate::indra::median_f32(&mut xs)
++        crate::reading_helpers::median_f32(&mut xs)
+     }
+ }
+
+@@ -46,7 +46,7 @@
+     if angles.is_empty() {
+         0.
+     } else {
+-        crate::indra::median_f64(&mut angles)
++        crate::reading_helpers::median_f64(&mut angles)
+     }
+ }
+
+--- a/src/oarocr/reading/marks.rs
++++ b/src/oarocr/reading/marks.rs
+@@ -156,7 +156,7 @@
+                 continue;
+             }
+             floating = true;
+-            let typical = crate::indra::median_f64(&mut ratios);
++            let typical = crate::reading_helpers::median_f64(&mut ratios);
+             for &(i, f) in &frames {
+                 if reach[i][side] > 0. {
+                     continue;
+@@ -203,7 +203,7 @@
+             let old = text::canonical(&reads[i].text);
+             let number = |s: &str| {
+                 s.chars()
+-                    .filter(|c| crate::indra::is_digit(*c))
++                    .filter(|c| crate::reading_helpers::is_digit(*c))
+                     .collect::<String>()
+             };
+             if text::drop_reason(&new, r.confidence, self.rec_score_threshold, None).is_some()
+--- a/src/oarocr/reading/mod.rs
++++ b/src/oarocr/reading/mod.rs
+@@ -93,7 +93,7 @@
+             .filter(|r| r.text.chars().count() >= 2)
+             .map(|r| r.confidence)
+             .collect();
+-        if scores.len() < 3 || crate::indra::median_f64(&mut scores) >= 0.8 {
++        if scores.len() < 3 || crate::reading_helpers::median_f64(&mut scores) >= 0.8 {
+             return Ok(false);
+         }
+         let mut ids: Vec<_> = (0..page.boxes.len())
+--- a/src/oarocr/reading/recognition.rs
++++ b/src/oarocr/reading/recognition.rs
+@@ -270,7 +270,7 @@
+         (tokens.last().unwrap().last().unwrap().right - tokens[0][0].left)
+             / tokens.iter().map(Vec::len).sum::<usize>() as f64
+     } else {
+-        crate::indra::median_f64(&mut steps)
++        crate::reading_helpers::median_f64(&mut steps)
+     };
+     let mut words = Vec::new();
+     for (i, t) in tokens.iter().enumerate() {
+--- a/src/oarocr/structure.rs
++++ b/src/oarocr/structure.rs
+@@ -13,22 +13,28 @@
+ use oar_ocr_core::core::traits::adapter::{AdapterBuilder, ModelAdapter};
+ use oar_ocr_core::core::{ModelSource, OCRError};
+ use oar_ocr_core::domain::adapters::{
+-    DocumentOrientationAdapter, DocumentOrientationAdapterBuilder, FormulaRecognitionAdapter,
+-    LayoutDetectionAdapter, LayoutDetectionAdapterBuilder, PPFormulaNetAdapterBuilder,
++    DocumentOrientationAdapter, DocumentOrientationAdapterBuilder,
++    LayoutDetectionAdapter, LayoutDetectionAdapterBuilder,
+     SLANetWiredAdapterBuilder, SLANetWirelessAdapterBuilder, SealTextDetectionAdapter,
+     SealTextDetectionAdapterBuilder, TableCellDetectionAdapter, TableCellDetectionAdapterBuilder,
+     TableClassificationAdapter, TableClassificationAdapterBuilder,
+     TableStructureRecognitionAdapter, TextDetectionAdapter, TextDetectionAdapterBuilder,
+     TextLineOrientationAdapter, TextLineOrientationAdapterBuilder, TextRecognitionAdapter,
+     TextRecognitionAdapterBuilder, UVDocRectifierAdapter, UVDocRectifierAdapterBuilder,
+-    UniMERNetAdapterBuilder,
+ };
++#[cfg(feature = "formula-recognition")]
++use oar_ocr_core::domain::adapters::{
++    FormulaRecognitionAdapter, PPFormulaNetAdapterBuilder, UniMERNetAdapterBuilder,
++};
++#[cfg(feature = "formula-recognition")]
++use oar_ocr_core::domain::tasks::FormulaRecognitionConfig;
+ use oar_ocr_core::domain::structure::{StructureResult, TableResult, TableType};
+ use oar_ocr_core::domain::tasks::{
+-    FormulaRecognitionConfig, LayoutDetectionConfig, TableCellDetectionConfig,
++    LayoutDetectionConfig, TableCellDetectionConfig,
+     TableClassificationConfig, TableStructureRecognitionConfig, TextDetectionConfig,
+     TextRecognitionConfig,
+ };
++#[cfg(feature = "formula-recognition")]
+ use oar_ocr_core::predictors::FormulaModelKind;
+ use std::path::PathBuf;
+ use std::sync::Arc;
+@@ -78,6 +84,7 @@
+     use_wired_table_cells_trans_to_html: bool,
+     use_wireless_table_cells_trans_to_html: bool,
+
++    #[cfg(feature = "formula-recognition")]
+     formula_recognition_adapter: Option<FormulaRecognitionAdapter>,
+
+     seal_text_detection_adapter: Option<SealTextDetectionAdapter>,
+@@ -115,11 +122,6 @@
+ ///     .with_table_classification("table_cls.onnx")
+ ///     .with_table_cell_detection("table_cell.onnx", "wired")
+ ///     .with_table_structure_recognition("table_struct.onnx", "wired")
+-///     .with_formula_recognition(
+-///         "formula.onnx",
+-///         "tokenizer.json",
+-///         "pp_formulanet"
+-///     )
+ ///     .build()?;
+ /// # let _ = structure;
+ /// # Ok(())
+@@ -161,9 +163,13 @@
+     use_wireless_table_cells_trans_to_html: bool,
+
+     // Optional formula recognition
++    #[cfg(feature = "formula-recognition")]
+     formula_recognition_model: Option<ModelSource>,
++    #[cfg(feature = "formula-recognition")]
+     formula_recognition_type: Option<Result<FormulaModelKind, String>>,
++    #[cfg(feature = "formula-recognition")]
+     formula_tokenizer_path: Option<PathBuf>,
++    #[cfg(feature = "formula-recognition")]
+     formula_ort_session_config: Option<OrtSessionConfig>,
+
+     // Optional seal text detection
+@@ -190,6 +196,7 @@
+     table_classification_config: Option<TableClassificationConfig>,
+     table_cell_detection_config: Option<TableCellDetectionConfig>,
+     table_structure_recognition_config: Option<TableStructureRecognitionConfig>,
++    #[cfg(feature = "formula-recognition")]
+     formula_recognition_config: Option<FormulaRecognitionConfig>,
+     text_detection_config: Option<TextDetectionConfig>,
+     text_recognition_config: Option<TextRecognitionConfig>,
+@@ -289,9 +296,13 @@
+             use_e2e_wireless_table_rec: true,
+             use_wired_table_cells_trans_to_html: false,
+             use_wireless_table_cells_trans_to_html: false,
++            #[cfg(feature = "formula-recognition")]
+             formula_recognition_model: None,
++            #[cfg(feature = "formula-recognition")]
+             formula_recognition_type: None,
++            #[cfg(feature = "formula-recognition")]
+             formula_tokenizer_path: None,
++            #[cfg(feature = "formula-recognition")]
+             formula_ort_session_config: None,
+             seal_text_detection_model: None,
+             text_detection_model: None,
+@@ -310,6 +321,7 @@
+             table_classification_config: None,
+             table_cell_detection_config: None,
+             table_structure_recognition_config: None,
++            #[cfg(feature = "formula-recognition")]
+             formula_recognition_config: None,
+             text_detection_config: None,
+             text_recognition_config: None,
+@@ -731,6 +743,7 @@
+     ///   [`FormulaModelKind`]
+     ///
+     /// This component recognizes mathematical formulas and outputs LaTeX.
++    #[cfg(feature = "formula-recognition")]
+     pub fn with_formula_recognition(
+         mut self,
+         model_source: impl Into<ModelSource>,
+@@ -744,12 +757,14 @@
+     }
+
+     /// Sets the formula recognition configuration.
++    #[cfg(feature = "formula-recognition")]
+     pub fn formula_recognition_config(mut self, config: FormulaRecognitionConfig) -> Self {
+         self.formula_recognition_config = Some(config);
+         self
+     }
+
+     /// Sets an ONNX Runtime session configuration only for formula recognition.
++    #[cfg(feature = "formula-recognition")]
+     pub fn formula_ort_session(mut self, config: OrtSessionConfig) -> Self {
+         self.formula_ort_session_config = Some(config);
+         self
+@@ -807,6 +822,7 @@
+     pub fn build(mut self) -> Result<OARStructure, OCRError> {
+         for config in [
+             self.ort_session_config.as_mut(),
++            #[cfg(feature = "formula-recognition")]
+             self.formula_ort_session_config.as_mut(),
+         ] {
+             apply_gpu_memory_budget(config, self.gpu_memory_budget)?;
+@@ -831,6 +847,7 @@
+                 _ => {}
+             }
+         }
++        #[cfg(feature = "formula-recognition")]
+         if let Some(Err(message)) = self.formula_recognition_type.as_ref() {
+             return Err(OCRError::config_error_detailed(
+                 "formula_recognition",
+@@ -853,6 +870,7 @@
+         // chose explicitly.
+         for config in [
+             self.ort_session_config.as_mut(),
++            #[cfg(feature = "formula-recognition")]
+             self.formula_ort_session_config.as_mut(),
+         ]
+         .into_iter()
+@@ -867,6 +885,7 @@
+         // only takes effect if set before the first CUDA session is created — and
+         // here the formula adapter is built after ~10 other CUDA models. So set it
+         // up front whenever a formula model will run on CUDA.
++        #[cfg(feature = "formula-recognition")]
+         if self.formula_recognition_model.is_some() {
+             use oar_ocr_core::core::config::OrtExecutionProvider;
+             let uses_cuda = self
+@@ -889,9 +908,12 @@
+         }
+
+         self.ort_session_config = self.ort_session_config.map(OrtSessionConfig::resolve_auto);
+-        self.formula_ort_session_config = self
+-            .formula_ort_session_config
+-            .map(OrtSessionConfig::resolve_auto);
++        #[cfg(feature = "formula-recognition")]
++        {
++            self.formula_ort_session_config = self
++                .formula_ort_session_config
++                .map(OrtSessionConfig::resolve_auto);
++        }
+
+         // Resolve every model/dict/tokenizer path through the auto-download
+         // cache when the `auto-download` feature is enabled. With the feature
+@@ -921,7 +943,9 @@
+         resolve_opt_source(&mut self.wireless_table_structure_model)?;
+         resolve_opt_source(&mut self.wired_table_cell_model)?;
+         resolve_opt_source(&mut self.wireless_table_cell_model)?;
++        #[cfg(feature = "formula-recognition")]
+         resolve_opt_source(&mut self.formula_recognition_model)?;
++        #[cfg(feature = "formula-recognition")]
+         resolve_opt_path(&mut self.formula_tokenizer_path)?;
+         resolve_opt_source(&mut self.seal_text_detection_model)?;
+         resolve_opt_source(&mut self.text_detection_model)?;
+@@ -1274,6 +1298,7 @@
+         };
+
+         // Build formula recognition adapter if enabled
++        #[cfg(feature = "formula-recognition")]
+         let formula_recognition_adapter =
+             if let Some(ref model_path) = self.formula_recognition_model {
+                 let tokenizer_path = self.formula_tokenizer_path.as_ref().ok_or_else(|| {
+@@ -1474,6 +1499,7 @@
+             use_e2e_wireless_table_rec: self.use_e2e_wireless_table_rec,
+             use_wired_table_cells_trans_to_html: self.use_wired_table_cells_trans_to_html,
+             use_wireless_table_cells_trans_to_html: self.use_wireless_table_cells_trans_to_html,
++            #[cfg(feature = "formula-recognition")]
+             formula_recognition_adapter,
+             seal_text_detection_adapter,
+             text_detection_adapter,
+@@ -1521,6 +1547,17 @@
+ }
+
+ impl OARStructure {
++    fn has_formula_recognition(&self) -> bool {
++        #[cfg(feature = "formula-recognition")]
++        {
++            self.pipeline.formula_recognition_adapter.is_some()
++        }
++        #[cfg(not(feature = "formula-recognition"))]
++        {
++            false
++        }
++    }
++
+     fn finish_layout_elements(layout_elements: &mut Vec<crate::domain::structure::LayoutElement>) {
+         if layout_elements.len() > 1 {
+             let removed = crate::domain::structure::remove_overlapping_layout_elements(
+@@ -2082,6 +2119,8 @@
+         Ok((layout_elements, detected_region_blocks))
+     }
+
++    #[cfg(feature = "formula-recognition")]
++
+     fn recognize_formulas(
+         &self,
+         page_image: &image::RgbImage,
+@@ -2361,7 +2400,7 @@
+         // recognition is enabled. With formula recognition disabled, PaddleX
+         // keeps formula-like regions in overall OCR output.
+         let mut ocr_image = page_image.clone();
+-        if self.pipeline.formula_recognition_adapter.is_some() {
++        if self.has_formula_recognition() {
+             let mask_bboxes: Vec<crate::processors::BoundingBox> = layout_elements
+                 .iter()
+                 .filter(|e| e.element_type.is_formula())
+@@ -2979,8 +3018,11 @@
+     pub fn predict_image(&self, image: image::RgbImage) -> Result<StructureResult, OCRError> {
+         let t_total = Instant::now();
+         let prepared = self.prepare_page(image)?;
++        #[cfg(feature = "formula-recognition")]
+         let formulas =
+             self.recognize_formulas(&prepared.current_image, &prepared.layout_elements)?;
++        #[cfg(not(feature = "formula-recognition"))]
++        let formulas = Vec::new();
+         let result = self.complete_page(prepared, formulas)?;
+         tracing::debug!(
+             "structure stage: total predict_image {:.1} ms",
+@@ -3048,7 +3090,7 @@
+             };
+
+             let mut ocr_image = (*prepared.current_image).clone();
+-            if self.pipeline.formula_recognition_adapter.is_some() {
++            if self.has_formula_recognition() {
+                 let mask_bboxes: Vec<crate::processors::BoundingBox> = prepared
+                     .layout_elements
+                     .iter()
+@@ -3105,7 +3147,7 @@
+                 boxes
+             } else {
+                 let mut ocr_image = (*prepared.current_image).clone();
+-                if self.pipeline.formula_recognition_adapter.is_some() {
++                if self.has_formula_recognition() {
+                     let mask_bboxes: Vec<crate::processors::BoundingBox> = prepared
+                         .layout_elements
+                         .iter()
+@@ -3423,6 +3465,7 @@
+     ) -> Vec<Result<StructureResult, OCRError>> {
+         use oar_ocr_core::core::traits::task::ImageTaskInput;
+         use oar_ocr_core::domain::structure::FormulaResult;
++        #[cfg(feature = "formula-recognition")]
+         use oar_ocr_core::utils::BBoxCrop;
+
+         let image_batch_size = self
+@@ -3559,77 +3602,82 @@
+         // Phase 2: Batch formula recognition across all successfully prepared pages.
+         let t_formula = Instant::now();
+         let num_pages = prepared_pages.len();
+-        let mut per_page_formulas: Vec<Vec<FormulaResult>> =
++        let per_page_formulas: Vec<Vec<FormulaResult>> =
+             (0..num_pages).map(|_| Vec::new()).collect();
+-
+-        if let Some(ref formula_adapter) = self.pipeline.formula_recognition_adapter {
+-            let mut all_crops: Vec<image::RgbImage> = Vec::new();
+-            let mut crop_meta: Vec<(usize, oar_ocr_core::processors::BoundingBox)> = Vec::new();
+-
+-            for (page_idx, prepared) in prepared_pages.iter().enumerate() {
+-                let prepared = match prepared {
+-                    Ok(p) => p,
+-                    Err(_) => continue,
+-                };
+-                for elem in prepared
+-                    .layout_elements
+-                    .iter()
+-                    .filter(|e| e.element_type.is_formula())
+-                {
+-                    match BBoxCrop::crop_bounding_box(&prepared.current_image, &elem.bbox) {
+-                        Ok(crop) => {
+-                            all_crops.push(crop);
+-                            crop_meta.push((page_idx, elem.bbox.clone()));
+-                        }
+-                        Err(err) => {
+-                            tracing::warn!("Formula region crop failed (batch): {}", err);
++        #[cfg(feature = "formula-recognition")]
++        let per_page_formulas = {
++            let mut per_page_formulas = per_page_formulas;
++
++            if let Some(ref formula_adapter) = self.pipeline.formula_recognition_adapter {
++                let mut all_crops: Vec<image::RgbImage> = Vec::new();
++                let mut crop_meta: Vec<(usize, oar_ocr_core::processors::BoundingBox)> = Vec::new();
++
++                for (page_idx, prepared) in prepared_pages.iter().enumerate() {
++                    let prepared = match prepared {
++                        Ok(p) => p,
++                        Err(_) => continue,
++                    };
++                    for elem in prepared
++                        .layout_elements
++                        .iter()
++                        .filter(|e| e.element_type.is_formula())
++                    {
++                        match BBoxCrop::crop_bounding_box(&prepared.current_image, &elem.bbox) {
++                            Ok(crop) => {
++                                all_crops.push(crop);
++                                crop_meta.push((page_idx, elem.bbox.clone()));
++                            }
++                            Err(err) => {
++                                tracing::warn!("Formula region crop failed (batch): {}", err);
++                            }
+                         }
+                     }
+                 }
+-            }
+-
+-            if !all_crops.is_empty() {
+-                let batch_size = formula_adapter.recommended_batch_size().max(1);
+-                let mut remaining_crops = all_crops.into_iter();
+-                let mut meta_offset = 0;
+-
+-                loop {
+-                    let chunk_vec: Vec<_> = remaining_crops.by_ref().take(batch_size).collect();
+-                    let chunk_len = chunk_vec.len();
+-                    if chunk_len == 0 {
+-                        break;
+-                    }
+-
+-                    let chunk_meta = &crop_meta[meta_offset..meta_offset + chunk_len];
+-                    match formula_adapter.execute(ImageTaskInput::new(chunk_vec), None) {
+-                        Ok(formula_output) => {
+-                            for ((page_idx, bbox), (formula_text, score)) in
+-                                chunk_meta.iter().cloned().zip(
+-                                    formula_output
+-                                        .formulas
+-                                        .into_iter()
+-                                        .zip(formula_output.scores),
+-                                )
+-                            {
+-                                let width = bbox.x_max() - bbox.x_min();
+-                                let height = bbox.y_max() - bbox.y_min();
+-                                if width > 0.0 && height > 0.0 {
+-                                    per_page_formulas[page_idx].push(FormulaResult {
+-                                        bbox,
+-                                        latex: formula_text,
+-                                        confidence: score.unwrap_or(0.0),
+-                                    });
++
++                if !all_crops.is_empty() {
++                    let batch_size = formula_adapter.recommended_batch_size().max(1);
++                    let mut remaining_crops = all_crops.into_iter();
++                    let mut meta_offset = 0;
++
++                    loop {
++                        let chunk_vec: Vec<_> = remaining_crops.by_ref().take(batch_size).collect();
++                        let chunk_len = chunk_vec.len();
++                        if chunk_len == 0 {
++                            break;
++                        }
++
++                        let chunk_meta = &crop_meta[meta_offset..meta_offset + chunk_len];
++                        match formula_adapter.execute(ImageTaskInput::new(chunk_vec), None) {
++                            Ok(formula_output) => {
++                                for ((page_idx, bbox), (formula_text, score)) in
++                                    chunk_meta.iter().cloned().zip(
++                                        formula_output
++                                            .formulas
++                                            .into_iter()
++                                            .zip(formula_output.scores),
++                                    )
++                                {
++                                    let width = bbox.x_max() - bbox.x_min();
++                                    let height = bbox.y_max() - bbox.y_min();
++                                    if width > 0.0 && height > 0.0 {
++                                        per_page_formulas[page_idx].push(FormulaResult {
++                                            bbox,
++                                            latex: formula_text,
++                                            confidence: score.unwrap_or(0.0),
++                                        });
++                                    }
+                                 }
+                             }
++                            Err(err) => {
++                                tracing::warn!("Batch formula recognition failed: {}", err);
++                            }
+                         }
+-                        Err(err) => {
+-                            tracing::warn!("Batch formula recognition failed: {}", err);
+-                        }
++                        meta_offset += chunk_len;
+                     }
+-                    meta_offset += chunk_len;
+-                }
+-            }
+-        }
++                }
++            }
++            per_page_formulas
++        };
+         let formula_ms = t_formula.elapsed().as_secs_f64() * 1000.0;
+
+         let t_ocr = Instant::now();
+--- /dev/null
++++ b/src/reading_helpers.rs
+@@ -0,0 +1,32 @@
++//! Shared reading-order numerical and character helpers.
++
++/// Median as numpy computes it on float32 data.
++pub(crate) fn median_f32(values: &mut [f32]) -> f32 {
++    values.sort_by(f32::total_cmp);
++    let n = values.len();
++    if n % 2 == 1 {
++        values[n / 2]
++    } else {
++        (values[n / 2 - 1] + values[n / 2]) / 2.0
++    }
++}
++
++/// Python's `str.isdigit` for one character, closely enough for features:
++/// decimal and superscript-style digits, not fractions or numeral letters.
++pub(crate) fn is_digit(c: char) -> bool {
++    c.is_numeric()
++        && !matches!(c,
++            '\u{BC}'..='\u{BE}' | '\u{2150}'..='\u{218B}' | '\u{09F4}'..='\u{09F9}'
++            | '\u{3007}' | '\u{3021}'..='\u{3029}' | '\u{3038}'..='\u{303A}'
++            | '\u{4E00}'..='\u{9FFF}')
++}
++
++pub(crate) fn median_f64(values: &mut [f64]) -> f64 {
++    values.sort_by(f64::total_cmp);
++    let n = values.len();
++    if n % 2 == 1 {
++        values[n / 2]
++    } else {
++        (values[n / 2 - 1] + values[n / 2]) / 2.0
++    }
++}
