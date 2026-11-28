@@ -1,6 +1,8 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 4bfded8..db5d610 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -237,7 +237,7 @@
+@@ -237,7 +237,7 @@ optional = true
  default-features = false
  
  [target.'cfg(all(unix, not(any(target_os = "redox", target_family = "wasm", target_os = "android", target_os = "ios", target_os = "macos"))))'.dependencies.calloop]
@@ -9,7 +11,7 @@
  
  [target.'cfg(all(unix, not(any(target_os = "redox", target_family = "wasm", target_os = "android", target_os = "ios", target_os = "macos"))))'.dependencies.libc]
  version = "0.2.64"
-@@ -251,7 +251,7 @@
+@@ -251,7 +251,7 @@ version = "2.0"
  optional = true
  
  [target.'cfg(all(unix, not(any(target_os = "redox", target_family = "wasm", target_os = "android", target_os = "ios", target_os = "macos"))))'.dependencies.rustix]
@@ -18,7 +20,7 @@
  features = [
      "std",
      "system",
-@@ -261,14 +261,14 @@
+@@ -261,14 +261,14 @@ features = [
  default-features = false
  
  [target.'cfg(all(unix, not(any(target_os = "redox", target_family = "wasm", target_os = "android", target_os = "ios", target_os = "macos"))))'.dependencies.sctk]
@@ -35,9 +37,11 @@
  optional = true
  default-features = false
  
+diff --git a/Cargo.toml.orig b/Cargo.toml.orig
+index 71f7c58..aa07f34 100644
 --- a/Cargo.toml.orig
 +++ b/Cargo.toml.orig
-@@ -254,20 +254,20 @@
+@@ -254,20 +254,20 @@ features = [
  [target.'cfg(all(unix, not(any(target_os = "redox", target_family = "wasm", target_os = "android", target_os = "ios", target_os = "macos"))))'.dependencies]
  ahash = { version = "0.8.7", features = ["no-rng"], optional = true }
  bytemuck = { version = "1.13.1", default-features = false, optional = true }
@@ -62,9 +66,36 @@
  wayland-backend = { version = "0.3.10", default-features = false, features = [
      "client_system",
  ], optional = true }
+diff --git a/src/event_loop.rs b/src/event_loop.rs
+index 233374b..09df898 100644
+--- a/src/event_loop.rs
++++ b/src/event_loop.rs
+@@ -517,6 +517,20 @@ pub struct OwnedDisplayHandle {
+     platform: platform_impl::OwnedDisplayHandle,
+ }
+ 
++#[cfg(wayland_platform)]
++impl OwnedDisplayHandle {
++    /// Clone the actual Wayland connection used by the event loop.
++    /// Additional protocol clients can create independent event queues on it.
++    /// Returns None when the selected display is X11.
++    pub fn wayland_connection(&self) -> Option<wayland_client::Connection> {
++        match &self.platform {
++            platform_impl::OwnedDisplayHandle::Wayland(connection) => Some(connection.clone()),
++            #[cfg(x11_platform)]
++            platform_impl::OwnedDisplayHandle::X(_) => None,
++        }
++    }
++}
++
+ impl fmt::Debug for OwnedDisplayHandle {
+     #[inline]
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+diff --git a/src/platform_impl/linux/wayland/event_loop/mod.rs b/src/platform_impl/linux/wayland/event_loop/mod.rs
+index fef13f4..ba6e51d 100644
 --- a/src/platform_impl/linux/wayland/event_loop/mod.rs
 +++ b/src/platform_impl/linux/wayland/event_loop/mod.rs
-@@ -782,7 +782,7 @@
+@@ -782,7 +782,7 @@ impl PumpEventNotifier {
                          if Ok(1) == rustix::io::read(read.as_fd(), &mut [0u8; 1]) {
                              break 'outer;
                          }

@@ -222,6 +222,12 @@
       "version": "0.3.0",
       "checksum": "de12c5f7e256ff97aa9a710a5e2fb345bb59302c98d77a3d2f249100d92145d4",
       "patch": "patches/ui-events-winit.patch"
+    },
+    {
+      "name": "smithay-clipboard",
+      "version": "0.7.3",
+      "checksum": "71704c03f739f7745053bde45fa203a46c58d25bc5c4efba1d9a60e9dba81226",
+      "patch": "patches/smithay-clipboard.patch"
     }
   ],
   "vtkio-xml-security": [
