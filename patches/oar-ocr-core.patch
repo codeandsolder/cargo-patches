@@ -1,0 +1,32 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -48,6 +48,7 @@
+ cuda = ["ort/cuda"]
+ default = [
+     "download-binaries",
++    "image-formats",
+     "simd",
+ ]
+ directml = ["ort/directml"]
+@@ -55,6 +56,7 @@
+     "ort/download-binaries",
+     "ort/tls-native",
+ ]
++image-formats = ["image/default-formats"]
+ openvino = ["ort/openvino"]
+ simd = [
+     "dep:wide",
+@@ -88,9 +90,13 @@
+
+ [dependencies.image]
+ version = "0.25.10"
++default-features = false
++features = ["rayon"]
+
+ [dependencies.imageproc]
+ version = "0.27.0"
++default-features = false
++features = ["rayon"]
+
+ [dependencies.multiversion]
+ version = "0.9"
