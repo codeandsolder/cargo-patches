@@ -6,7 +6,7 @@ publish = false
 
 [workspace]
 resolver = "3"
-exclude = ["oar-ocr", "oar-ocr-core"]
+exclude = ["oar-ocr", "oar-ocr-core", "ort", "ort-sys"]
 
 [features]
 default = ["encoded-formats"]
@@ -14,6 +14,8 @@ encoded-formats = ["image/png", "image/pnm"]
 full-formats = ["oar-ocr/image-formats"]
 formula-recognition = ["oar-ocr/formula-recognition"]
 indra = ["oar-ocr/indra"]
+tls-rustls-no-provider = []
+tls-rustls-platform = ["tls-rustls-no-provider", "oar-ocr/auto-download", "oar-ocr/download-binaries", "ort/fetch-models", "dep:ureq", "dep:sha2"]
 
 [dependencies]
 image = { version = "0.25.10", default-features = false }
@@ -21,10 +23,19 @@ oar-ocr = { path = "oar-ocr", default-features = false, features = ["simd"] }
 # The image/geometry tests never load ONNX models. Check this configuration
 # without downloading or linking an unrelated ONNX Runtime distribution.
 ort = { version = "=2.0.0-rc.15", default-features = false, features = ["load-dynamic"] }
+sha2 = { version = "0.11", optional = true }
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"], optional = true }
 
 [patch.crates-io]
 oar-ocr-core = { path = "oar-ocr-core" }
+ort = { path = "ort" }
+ort-sys = { path = "ort-sys" }
 
 [[test]]
 name = "image_features"
 path = "image_features.rs"
+
+[[test]]
+name = "download_tls"
+path = "download_tls.rs"
+required-features = ["tls-rustls-platform"]
