@@ -1,5 +1,5 @@
 diff --git a/src/lib.rs b/src/lib.rs
-index 7b31fcd..623f1eb 100644
+index 7b31fcd..dbd1078 100644
 --- a/src/lib.rs
 +++ b/src/lib.rs
 @@ -133,6 +133,8 @@ pub use render::{
@@ -7,7 +7,7 @@ index 7b31fcd..623f1eb 100644
      WebGlShaderProgramOperation, WebGlShaderStage, WebGlTextureBindings, WebGlTextureTarget,
  };
 +#[cfg(all(feature = "wgpu", feature = "text", feature = "full_image_support"))]
-+pub use render::{PrepareOutlineGlyphsError, PreparedOutlineGlyphs};
++pub use render::{OutlineGlyphStyle, PrepareOutlineGlyphsError, PreparedOutlineGlyphs};
  #[cfg(feature = "wgpu")]
  pub use render::{
      RenderOptions, RenderTarget, RenderTargetConfig, Renderer, TextureBinding, TextureBindings,
@@ -46,7 +46,7 @@ index d261674..f92e8a4 100644
                  EncodedPaint::Gradient(gradient) => {
                      let (gradient_start, gradient_width) =
 diff --git a/src/render/mod.rs b/src/render/mod.rs
-index 023f9b9..a3d667b 100644
+index 023f9b9..7f6570f 100644
 --- a/src/render/mod.rs
 +++ b/src/render/mod.rs
 @@ -29,6 +29,8 @@ pub use webgl::{
@@ -54,18 +54,30 @@ index 023f9b9..a3d667b 100644
      probe::{WebGlPendingProbe, WebGlProbeError, WebGlProbeStatus},
  };
 +#[cfg(all(feature = "wgpu", feature = "text", feature = "full_image_support"))]
-+pub use wgpu::{PrepareOutlineGlyphsError, PreparedOutlineGlyphs};
++pub use wgpu::{OutlineGlyphStyle, PrepareOutlineGlyphsError, PreparedOutlineGlyphs};
  #[cfg(feature = "wgpu")]
  pub use wgpu::{
      RenderOptions, RenderTarget, RenderTargetConfig, Renderer, TextureBinding, TextureBindings,
 diff --git a/src/render/wgpu/mod.rs b/src/render/wgpu/mod.rs
-index d8b3233..26ec2a7 100644
+index d8b3233..ebffa4b 100644
 --- a/src/render/wgpu/mod.rs
 +++ b/src/render/wgpu/mod.rs
-@@ -132,6 +132,43 @@ pub struct Renderer {
+@@ -132,6 +132,55 @@ pub struct Renderer {
      atlas_clear_scratch: Vec<u8>,
  }
  
++/// Font rasterization settings shared by ordinary glyph runs and retained consumers.
++#[cfg(all(feature = "text", feature = "full_image_support"))]
++#[derive(Clone, Copy, Debug)]
++pub struct OutlineGlyphStyle<'a> {
++    /// Physical pixels per em.
++    pub font_size: f32,
++    /// Vertical hinting policy.
++    pub hint: bool,
++    /// Signed F2Dot14 normalized variation coordinates in font-axis order.
++    pub normalized_coords: &'a [i16],
++}
++
 +/// Stable monochrome atlas slots and their GPU texture views.
 +#[cfg(all(feature = "text", feature = "full_image_support"))]
 +#[derive(Clone, Debug)]
@@ -106,7 +118,7 @@ index d8b3233..26ec2a7 100644
  impl Renderer {
      /// Creates a new renderer and its persistent resources.
      pub fn new(
-@@ -263,30 +300,7 @@ impl Renderer {
+@@ -263,30 +312,7 @@ impl Renderer {
          options: RenderOptions<'_>,
      ) -> Result<(), RenderError> {
          #[cfg(feature = "text")]
@@ -138,7 +150,7 @@ index d8b3233..26ec2a7 100644
  
          let result = self.render_scene(
              scene,
-@@ -310,6 +324,114 @@ impl Renderer {
+@@ -310,6 +336,120 @@ impl Renderer {
          result
      }
  
@@ -183,11 +195,16 @@ index d8b3233..26ec2a7 100644
 +        &mut self,
 +        resources: &mut Resources,
 +        font: &crate::peniko::FontData,
-+        font_size: f32,
-+        hint: bool,
++        style: OutlineGlyphStyle<'_>,
 +        glyph_ids: &[u32],
 +    ) -> Result<PreparedOutlineGlyphs, PrepareOutlineGlyphsError> {
-+        if !font_size.is_finite() || font_size <= 0.0 {
++        if !style.font_size.is_finite()
++            || style.font_size <= 0.0
++            || style
++                .normalized_coords
++                .iter()
++                .any(|&c| !(-16384..=16384).contains(&c))
++        {
 +            return Err(PrepareOutlineGlyphsError::Unavailable);
 +        }
 +        resources.ensure_glyph_resources();
@@ -201,8 +218,9 @@ index d8b3233..26ec2a7 100644
 +        scene.set_paint(crate::peniko::color::palette::css::BLACK);
 +        let result = scene
 +            .glyph_run(resources, font)
-+            .font_size(font_size)
-+            .hint(hint)
++            .font_size(style.font_size)
++            .hint(style.hint)
++            .normalized_coords(style.normalized_coords)
 +            .atlas_cache(true)
 +            .fill_glyphs(
 +                glyph_ids

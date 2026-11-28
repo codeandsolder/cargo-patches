@@ -342,7 +342,7 @@ index d9b5c29..72007ca 100644
  pub use commands::{AtlasCommand, AtlasCommandRecorder, AtlasPaint};
  pub use key::GlyphCacheKey;
 diff --git a/src/glyph.rs b/src/glyph.rs
-index b0bea9f..885ee91 100644
+index b0bea9f..858253a 100644
 --- a/src/glyph.rs
 +++ b/src/glyph.rs
 @@ -99,7 +99,7 @@ pub enum GlyphSkipReason {
@@ -606,7 +606,22 @@ index b0bea9f..885ee91 100644
              }
  
              // ── Outline Glyphs ──────────────────────────────────────────
-@@ -1314,11 +1336,97 @@ fn calculate_outline_transform(
+@@ -1016,7 +1038,13 @@ impl<'a, B> GlyphRunBuilder<'a, B> {
+ 
+     /// Set normalized variation coordinates for variable fonts.
+     pub fn normalized_coords(mut self, coords: &'a [NormalizedCoord]) -> Self {
+-        self.run.normalized_coords = bytemuck::cast_slice(coords);
++        // Unspecified axes are at their default value. Canonicalize trailing
++        // zeroes so explicit and implicit default instances share cache keys.
++        let len = coords
++            .iter()
++            .rposition(|&coord| coord != 0)
++            .map_or(0, |i| i + 1);
++        self.run.normalized_coords = bytemuck::cast_slice(&coords[..len]);
+         self
+     }
+ }
+@@ -1314,11 +1342,97 @@ fn calculate_outline_transform(
      Affine::new(final_transform)
  }
  
@@ -705,7 +720,7 @@ index b0bea9f..885ee91 100644
      // Scale factor already accounts for ppem, so we can just draw in the size of the
      // actual image
      let area = Rect::new(
-@@ -1330,6 +1438,7 @@ fn create_bitmap_glyph(pixmap: Pixmap) -> GlyphType<'static> {
+@@ -1330,6 +1444,7 @@ fn create_bitmap_glyph(pixmap: Pixmap) -> GlyphType<'static> {
  
      GlyphType::Bitmap(GlyphBitmap {
          pixmap: Arc::new(pixmap),
@@ -713,7 +728,7 @@ index b0bea9f..885ee91 100644
          area,
      })
  }
-@@ -1344,7 +1453,7 @@ fn create_bitmap_glyph(pixmap: Pixmap) -> GlyphType<'static> {
+@@ -1344,7 +1459,7 @@ fn create_bitmap_glyph(pixmap: Pixmap) -> GlyphType<'static> {
  /// - Special handling for Apple Color Emoji
  fn calculate_bitmap_transform(
      glyph: Glyph,
@@ -722,7 +737,7 @@ index b0bea9f..885ee91 100644
      draw_props: DrawProps,
      font_size: f32,
      upem: f32,
-@@ -1371,7 +1480,7 @@ fn calculate_bitmap_transform(
+@@ -1371,7 +1486,7 @@ fn calculate_bitmap_transform(
          Origin::TopLeft => Vec2::default(),
          Origin::BottomLeft => Vec2 {
              x: 0.,

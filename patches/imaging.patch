@@ -120,18 +120,20 @@ index 29a3966..7f52af1 100644
      bytes: u64,
  }
 diff --git a/imaging_vello_hybrid/src/lib.rs b/imaging_vello_hybrid/src/lib.rs
-index 36bc918..4b699a2 100644
+index 36bc918..edd9ae3 100644
 --- a/imaging_vello_hybrid/src/lib.rs
 +++ b/imaging_vello_hybrid/src/lib.rs
-@@ -242,6 +242,7 @@ use crate::wgpu_support::{
+@@ -242,6 +242,9 @@ use crate::wgpu_support::{
  
  pub use scene::VelloHybridScene;
  pub use scene_sink::VelloHybridSceneSink;
-+pub use vello_gpu::{GlyphAtlasStats, PrepareOutlineGlyphsError, PreparedOutlineGlyphs};
++pub use vello_gpu::{
++    GlyphAtlasStats, OutlineGlyphStyle, PrepareOutlineGlyphsError, PreparedOutlineGlyphs,
++};
  
  /// Errors that can occur when rendering via Vello hybrid.
  #[derive(Debug)]
-@@ -309,7 +310,7 @@ impl VelloHybridRendererState {
+@@ -309,7 +312,7 @@ impl VelloHybridRendererState {
      }
  
      fn new(device: wgpu::Device, queue: wgpu::Queue) -> Self {
@@ -140,7 +142,7 @@ index 36bc918..4b699a2 100644
              &device,
              &queue,
              &RenderTargetConfig {
-@@ -317,6 +318,13 @@ impl VelloHybridRendererState {
+@@ -317,6 +320,13 @@ impl VelloHybridRendererState {
                  width: 1,
                  height: 1,
              },
@@ -154,7 +156,7 @@ index 36bc918..4b699a2 100644
          );
  
          Self {
-@@ -396,6 +404,33 @@ impl VelloHybridRenderer {
+@@ -396,6 +406,31 @@ impl VelloHybridRenderer {
          }
      }
  
@@ -168,15 +170,13 @@ index 36bc918..4b699a2 100644
 +    pub fn prepare_outline_glyphs(
 +        &mut self,
 +        font: &peniko::FontData,
-+        font_size: f32,
-+        hint: bool,
++        style: OutlineGlyphStyle<'_>,
 +        glyph_ids: &[u32],
 +    ) -> Result<PreparedOutlineGlyphs, PrepareOutlineGlyphsError> {
 +        let result = self.state.renderer.prepare_outline_glyphs(
 +            &mut self.state.resources,
 +            font,
-+            font_size,
-+            hint,
++            style,
 +            glyph_ids,
 +        );
 +        if matches!(result, Err(PrepareOutlineGlyphsError::Render(_))) {
@@ -473,17 +473,17 @@ index 15b4cc8..86c9276 100644
          };
 diff --git a/imaging_vello_hybrid/tests/glyph_atlas.rs b/imaging_vello_hybrid/tests/glyph_atlas.rs
 new file mode 100644
-index 0000000..f4c65c7
+index 0000000..203eaa9
 --- /dev/null
 +++ b/imaging_vello_hybrid/tests/glyph_atlas.rs
-@@ -0,0 +1,235 @@
+@@ -0,0 +1,308 @@
 +// Copyright 2026 the Imaging Authors
 +// SPDX-License-Identifier: Apache-2.0 OR MIT
 +
 +//! GPU regression for the immediate-frame glyph atlas.
 +
 +use imaging::{Painter, record::Scene, render::ImageRenderer};
-+use imaging_vello_hybrid::{VelloHybridRenderer, wgpu};
++use imaging_vello_hybrid::{OutlineGlyphStyle, VelloHybridRenderer, wgpu};
 +use peniko::{Blob, Color};
 +use std::sync::Arc;
 +
@@ -575,7 +575,15 @@ index 0000000..f4c65c7
 +
 +    // A public retained scene contains no evictable atlas references.
 +    let leased = renderer
-+        .prepare_outline_glyphs(&font, 24.0, false, &[36])
++        .prepare_outline_glyphs(
++            &font,
++            OutlineGlyphStyle {
++                font_size: 24.0,
++                hint: false,
++                normalized_coords: &[],
++            },
++            &[36],
++        )
 +        .unwrap();
 +    let slot = leased.slots().next().unwrap();
 +    assert!(slot.width > 0 && slot.height > 0);
@@ -712,12 +720,77 @@ index 0000000..f4c65c7
 +        }
 +    }
 +}
++
++#[test]
++fn prewarm_matches_variable_instances_and_canonical_defaults() {
++    let (device, queue) = pollster::block_on(async {
++        let adapter = wgpu::Instance::default()
++            .request_adapter(&Default::default())
++            .await
++            .expect("GPU required for atlas validation");
++        adapter.request_device(&Default::default()).await.unwrap()
++    });
++    let mut renderer = VelloHybridRenderer::new(device, queue);
++    let font = peniko::FontData::new(
++        Blob::new(Arc::new(include_bytes!(
++            "../../test_assets/fonts/AtlasVariable.ttf"
++        ))),
++        0,
++    );
++    let mut scene = Scene::new();
++    Painter::new(&mut scene)
++        .glyphs(&font, Color::BLACK)
++        .font_size(32.0)
++        .normalized_coords(&[0])
++        .hint(false)
++        .transform(kurbo::Affine::translate((8.0, 40.0)))
++        .draw(
++            &peniko::Style::Fill(peniko::Fill::NonZero),
++            [imaging::record::Glyph {
++                id: 1,
++                x: 0.0,
++                y: 0.0,
++            }],
++        );
++    ImageRenderer::render_source(&mut renderer, &mut &scene, 64, 64).unwrap();
++    let before = renderer.glyph_atlas_stats().unwrap();
++    let normal = renderer
++        .prepare_outline_glyphs(
++            &font,
++            OutlineGlyphStyle {
++                font_size: 32.0,
++                hint: false,
++                normalized_coords: &[],
++            },
++            &[1],
++        )
++        .unwrap();
++    let after = renderer.glyph_atlas_stats().unwrap();
++    assert_eq!(before.entries, after.entries);
++    assert!(after.hits > before.hits);
++    let bold = renderer
++        .prepare_outline_glyphs(
++            &font,
++            OutlineGlyphStyle {
++                font_size: 32.0,
++                hint: false,
++                normalized_coords: &[16384],
++            },
++            &[1],
++        )
++        .unwrap();
++    assert!(bold.slots().next().unwrap().width > normal.slots().next().unwrap().width);
++    assert_eq!(
++        renderer.glyph_atlas_stats().unwrap().entries,
++        after.entries + 1
++    );
++}
 diff --git a/test_assets/fonts/Atlas-fixtures.md b/test_assets/fonts/Atlas-fixtures.md
 new file mode 100644
-index 0000000..14156f8
+index 0000000..92586d0
 --- /dev/null
 +++ b/test_assets/fonts/Atlas-fixtures.md
-@@ -0,0 +1,9 @@
+@@ -0,0 +1,11 @@
 +# Synthetic glyph-atlas regression fixtures
 +
 +These small test fonts are original geometric fixtures, provided under the same Apache-2.0 OR MIT terms as Imaging. They contain no third-party font outlines or images. Glyph ID 1 is mapped to U+E000 in each.
@@ -727,6 +800,8 @@ index 0000000..14156f8
 +- AtlasMask: EBDT/EBLC 4 ppem, row-aligned 4-bit coverage strike with each row [15,8,0,15].
 +
 +- AtlasBGRA: CBDT/CBLC 4 ppem, raw premultiplied BGRA, opaque red left half and half-alpha green right half.
++
++- AtlasVariable: synthetic weight axis (400 to 900), glyph 1 ink width 512 to 896 units and corresponding variable advance.
 diff --git a/test_assets/fonts/AtlasBGRA.ttf b/test_assets/fonts/AtlasBGRA.ttf
 new file mode 100644
 index 0000000000000000000000000000000000000000..dc2a4cb0677ac82f39a0e26a28bd866bcc2650b1
@@ -801,6 +876,28 @@ z@G;0k+001dEJ$oN5ZkdNC$Tud&pjwLy)-AWh{2Jegdv9^k)fC&fWeQ!ogs)Jl_8y>
 z6f9N*@hQk{xG*TCFtH}*=j0bLK>P|yy*vy83?2*&44^;;;cSrhg1mHv&Hz7mUM?vv
 z1_lORPY;(Mm>Lc?1_lQC&;LP*QOeWBF{ENn@{jWeKFG_fG4)9qWF1(+c=#{_!$#A8
 V0&CabuL2q8>FVdQ&MBdZ0RYu%XM6wv
+
+literal 0
+HcmV?d00001
+
+diff --git a/test_assets/fonts/AtlasVariable.ttf b/test_assets/fonts/AtlasVariable.ttf
+new file mode 100644
+index 0000000000000000000000000000000000000000..55fa58fece4ccea25cf24f91d60963cbbcde5541
+GIT binary patch
+literal 988
+zcmZQzWME+6V`yMtW=QY|a}08v;GoaIz-+?6z+mPdtZ$_9!_0?)fiZ)DfgvF{#4)6z
+zAftzYfjNhPfk7rYH?e?$=Rq(71LFk-1_qO~vc#e~+001{49p!23=AsiIhAQbN){>%
+z3`{%>3=9(KWr;;>a~lsbFfgxSU|=xFNKH(MOkDDVfq~%-$i9q>)I`=c=Hm<uj4B}g
+z8M!4DYz_<z3=E7X7#J8ha`KZC89*j6FtIQ&FtFt&RunL>Ft9N&FnTaBFev0D=B8!_
+zTvuRVU;^oXQjlL<QczTKm4ShogMooT2kciy28K(HQ-8+u+k9nU1{uS^P@}q`0b~n|
+zW@2ClahVyIKorP&1_tJq|1As*VD%163}BO>l3<DnEW*UV0;U<@I>C})f|-SZaRLJ?
+z#0anm9zp;~&febMo`K;3!vm-rm|GZXkfcFO1&GU-z+nZp8{`2I24=8pL>O2Y6c|8C
+zz^;41@c%!^y#N0d7{T%&6BxkZ3Q7wMVBa${Fc>NdDl#$rgM<YS!!)Q`Mh0F;h%kVB
+z$<DwF6=y~gXF+1KA=r!z3~UTwSFvz1FfvFnNP%3)!pXqIz{g+$Wium*vmmkA5Nt+}
+zYn>cRauSQf5{ohulX6mnQqxOw5{tr9Gt)Cl7#tZ&7;+dA8HyRg7!nzZ7%~|W8Il-s
+z7*ZL67*ZM18A`#jMGWB#sSKG6=?obRCE!qlgamdH6zNQ?$@w|?MNl7$peO`|9S>MW
+zi~$_34h#;U5CXFq7#Kk*48-ODtAXidDo@WS0ciz`3NV1u5lD^$EIxq&lx7&1TR=83
+oLQ)-AF@qG;y;2|<2JQw%1}+Bn1_lQPW+nzE<_1T`2F8Xa08rs>asU7T
 
 literal 0
 HcmV?d00001
