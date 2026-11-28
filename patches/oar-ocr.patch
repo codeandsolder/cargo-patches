@@ -1,0 +1,38 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -44,10 +44,12 @@
+ cuda = ["oar-ocr-core/cuda"]
+ default = [
+     "download-binaries",
++    "image-formats",
+     "simd",
+ ]
+ directml = ["oar-ocr-core/directml"]
+ download-binaries = ["oar-ocr-core/download-binaries"]
++image-formats = ["image/default-formats", "oar-ocr-core/image-formats"]
+ openvino = ["oar-ocr-core/openvino"]
+ simd = ["oar-ocr-core/simd"]
+ tensorrt = ["oar-ocr-core/tensorrt"]
+@@ -119,9 +121,13 @@
+
+ [dependencies.image]
+ version = "0.25.10"
++default-features = false
++features = ["rayon"]
+
+ [dependencies.imageproc]
+ version = "0.27.0"
++default-features = false
++features = ["rayon"]
+
+ [dependencies.nalgebra]
+ version = "0.35"
+@@ -171,7 +177,7 @@
+
+ [dependencies.zip]
+ version = "9.5"
+-features = ["deflate-flate2"]
++features = ["deflate-flate2-zlib-rs"]
+ default-features = false
+
+ [dev-dependencies.ab_glyph]

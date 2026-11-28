@@ -42,3 +42,16 @@ Google's unused testbucket credential fixture is omitted; no push-protection
 exception is needed.
 
 The Reqsign validation workspace pins the original test-helper dependency versions to retain one patched core identity. It links all three provider library test binaries with the static BTLS runtime, inspects native dependencies, and runs JWT/signing regressions before publication. Update its lock alongside any family dependency pin change.
+
+## OAR OCR feature ownership
+
+The `oar-image-features` family imports the two matching 0.11.0 registry
+crates. `image-formats` is independently selectable (enabled by the
+standalone defaults); an RGB-buffer consumer can disable defaults and
+select only its own encoded formats through `image`. Both OAR packages
+retain Rayon for image processing, without the unused imageproc text
+and FFT subsystems. ZIP explicitly selects its own zlib-rs backend so
+Indra NPZ loading does not depend on accidental PNG/TIFF feature
+unification. Recognition algorithms and model provisioning are unchanged.
+The validation workspace exercises raw RGB, narrow PNG/PNM, and full
+format configurations through the actual OAR utility APIs.
