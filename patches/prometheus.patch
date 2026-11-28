@@ -1,7 +1,25 @@
 diff --git a/src/encoder/text.rs b/src/encoder/text.rs
-index e524722..cd311b3 100644
+index e524722..0dcea0b 100644
 --- a/src/encoder/text.rs
 +++ b/src/encoder/text.rs
+@@ -95,7 +95,7 @@ impl TextEncoder {
+                                 name,
+                                 Some("_bucket"),
+                                 m,
+-                                Some((BUCKET_LABEL, &upper_bound.to_string())),
++                                Some((BUCKET_LABEL, &format_float(upper_bound))),
+                                 b.cumulative_count() as f64,
+                             )?;
+                             if upper_bound.is_sign_positive() && upper_bound.is_infinite() {
+@@ -133,7 +133,7 @@ impl TextEncoder {
+                                 name,
+                                 None,
+                                 m,
+-                                Some((QUANTILE, &q.quantile().to_string())),
++                                Some((QUANTILE, &format_float(q.quantile()))),
+                                 q.value(),
+                             )?;
+                         }
 @@ -150,7 +150,11 @@ impl TextEncoder {
                          )?;
                      }
@@ -15,7 +33,35 @@ index e524722..cd311b3 100644
                      }
                  }
              }
-@@ -318,6 +322,32 @@ mod tests {
+@@ -170,6 +174,18 @@ impl Encoder for TextEncoder {
+     }
+ }
+ 
++fn format_float(value: f64) -> Cow<'static, str> {
++    if value == f64::INFINITY {
++        Cow::Borrowed(POSITIVE_INF)
++    } else if value == f64::NEG_INFINITY {
++        Cow::Borrowed("-Inf")
++    } else if value.is_nan() {
++        Cow::Borrowed("NaN")
++    } else {
++        Cow::Owned(value.to_string())
++    }
++}
++
+ /// `write_sample` writes a single sample in text format to `writer`, given the
+ /// metric name, an optional metric name postfix, the metric proto message
+ /// itself, optionally an additional label name and value (use empty strings if
+@@ -191,7 +207,7 @@ fn write_sample(
+     label_pairs_to_text(mc.get_label(), additional_label, writer)?;
+ 
+     writer.write_all(" ")?;
+-    writer.write_all(&value.to_string())?;
++    writer.write_all(&format_float(value))?;
+ 
+     let timestamp = mc.timestamp_ms();
+     if timestamp != 0 {
+@@ -318,6 +334,59 @@ mod tests {
      use crate::histogram::{Histogram, HistogramOpts};
      use crate::metrics::{Collector, Opts};
  
@@ -43,6 +89,33 @@ index e524722..cd311b3 100644
 +            TextEncoder::new().encode_to_string(&[family]).unwrap(),
 +            "# HELP legacy_value Legacy sensor\n# TYPE legacy_value untyped\nlegacy_value{source=\"sensor\"} -7.25 123\n"
 +        );
++    }
++
++    #[test]
++    fn test_explicit_infinity_bucket_and_special_values() {
++        let mut bucket = proto::Bucket::default();
++        bucket.set_upper_bound(f64::INFINITY);
++        bucket.set_cumulative_count(2);
++        let mut histogram = proto::Histogram::default();
++        histogram.set_sample_count(2);
++        histogram.set_sample_sum(f64::INFINITY);
++        histogram.set_bucket(vec![bucket]);
++        let mut metric = proto::Metric::default();
++        metric.set_histogram(histogram);
++        let mut family = proto::MetricFamily::default();
++        family.set_name("latency".into());
++        family.set_field_type(MetricType::HISTOGRAM);
++        family.set_metric(vec![metric]);
++        assert_eq!(
++            TextEncoder::new().encode_to_string(&[family]).unwrap(),
++            "# TYPE latency histogram\nlatency_bucket{le=\"+Inf\"} 2\nlatency_sum +Inf\nlatency_count 2\n"
++        );
++        let gauge = Gauge::new("special", "Special values").unwrap();
++        for (value, repr) in [(f64::NEG_INFINITY, "-Inf"), (f64::NAN, "NaN")] {
++            gauge.set(value);
++            let text = TextEncoder::new().encode_to_string(&gauge.collect()).unwrap();
++            assert!(text.ends_with(&format!("special {}\n", repr)));
++        }
 +    }
 +
      #[test]
