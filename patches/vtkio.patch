@@ -1,0 +1,263 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -68,7 +68,7 @@
+ path = "tests/xml.rs"
+ 
+ [dependencies.base64]
+-version = "0.22"
++version = "0.23"
+ 
+ [dependencies.bytemuck]
+ version = "1.5"
+@@ -99,7 +99,8 @@
+ version = "0.2"
+ 
+ [dependencies.quick-xml]
+-version = "0.36"
++version = "0.41"
++path = "../quick-xml"
+ features = ["serialize"]
+ optional = true
+ 
+@@ -120,9 +121,6 @@
+ ]
+ optional = true
+ 
+-[dependencies.trim-in-place]
+-version = "0.1"
+-
+ [dependencies.xz2]
+ version = "0.1.6"
+ optional = true
+--- a/Cargo.toml.orig
++++ b/Cargo.toml.orig
+@@ -18,18 +18,17 @@
+ num-traits = "0.2"
+ num-derive = "0.4"
+ byteorder = "1.3"
+-base64 = "0.22"
++base64 = "0.23"
+ bytemuck = { version = "1.5", features = ["extern_crate_alloc"] }
+ lz4 = { package = "lz4_flex", version = "0.11", optional = true }
+ flate2 = { version = "1.0.19", optional = true }
+ xz2 = { version = "0.1.6", optional = true } # LZMA
+ # quick-xml = { path = "../quick-xml", features = ["serialize"], optional = true }
+-quick-xml = { git = "https://github.com/elrnv/quick-xml.git", branch = "binary-support4", version = "0.36", features = ["serialize"], optional = true }
++quick-xml = { path = "../quick-xml", version = "0.41", features = ["serialize"], optional = true }
+ serde = { version = "1.0", features = ["derive"], optional = true }
+ tokio = { version = "1.3", features = ["fs", "io-util"], optional = true }
+ rayon = { version = "1.0", optional = true }
+ log = "0.4"
+-trim-in-place = "0.1"
+ 
+ [dev-dependencies]
+ regex = "1.0"
+--- a/src/xml.rs
++++ b/src/xml.rs
+@@ -30,6 +30,7 @@
+     Model(model::Error),
+     IO(std::io::Error),
+     Deserialization(de::DeError),
++    Serialization(quick_xml::SeError),
+     InvalidVersion,
+     TypeExtensionMismatch,
+     InvalidType,
+@@ -49,6 +50,7 @@
+             Error::Model(source) => write!(f, "Model processing error: {:?}", source),
+             Error::IO(source) => write!(f, "I/O error: {:?}", source),
+             Error::Deserialization(source) => write!(f, "Deserialization error: {:?}", source),
++            Error::Serialization(source) => write!(f, "Serialization error: {:?}", source),
+             Error::InvalidVersion => write!(f, "VTK version must be in \"major.minor\" format"),
+             Error::InvalidByteOrder => write!(
+                 f,
+@@ -78,6 +80,7 @@
+             Error::Model(source) => Some(source),
+             Error::IO(source) => Some(source),
+             Error::Deserialization(source) => Some(source),
++            Error::Serialization(source) => Some(source),
+             _ => None,
+         }
+     }
+@@ -110,6 +113,12 @@
+ impl From<de::DeError> for Error {
+     fn from(e: de::DeError) -> Error {
+         Error::Deserialization(e)
++    }
++}
++
++impl From<quick_xml::SeError> for Error {
++    fn from(e: quick_xml::SeError) -> Error {
++        Error::Serialization(e)
+     }
+ }
+ 
+@@ -321,7 +330,7 @@
+             S: Serializer,
+         {
+             match self {
+-                Data::Data(s) => se.serialize_str(s),
++                Data::Data(s) => se.serialize_newtype_variant("Data", 0, "$text", s),
+                 _ => se.serialize_unit_variant("Data", 1, "InformationKey"),
+             }
+         }
+@@ -371,21 +380,11 @@
+         }
+ 
+         // #[cfg(not(feature = "binary"))]
+-        fn visit_string<E>(self, mut v: String) -> Result<Self::Value, E>
++        fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+         where
+             E: serde::de::Error,
+         {
+-            use trim_in_place::TrimInPlace;
+-            v.trim_in_place();
+-
+-            // Skip the first byte which always corresponds to the preceeding underscore
+-            if v.is_empty() {
+-                return Ok(RawData::default());
+-            }
+-            if !v.starts_with('_') {
+-                return Err(serde::de::Error::custom("Missing preceeding underscore"));
+-            }
+-            Ok(RawData(v[1..].to_string().into_bytes()))
++            self.visit_str(&v)
+         }
+ 
+         fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+@@ -1664,9 +1663,10 @@
+ where
+     D: serde::de::Deserializer<'de>,
+ {
+-    use trim_in_place::TrimInPlace;
+     let mut de_string = String::deserialize(d)?;
+-    de_string.trim_in_place();
++    de_string.truncate(de_string.trim_end().len());
++    let start = de_string.len() - de_string.trim_start().len();
++    de_string.drain(..start);
+     Ok(de_string)
+ }
+ 
+@@ -3274,10 +3274,10 @@
+ mod tests {
+     use super::*;
+     use pretty_assertions::assert_eq;
+-    use quick_xml::reader::Reader;
+-
+-    fn custom_reader(input: &str) -> Reader<&[u8]> {
+-        let mut reader = Reader::from_str(input);
++    use quick_xml::NsReader;
++
++    fn custom_reader(input: &str) -> NsReader<&[u8]> {
++        let mut reader = NsReader::from_str(input);
+         let config = reader.config_mut();
+         config.expand_empty_elements = true;
+         config.trim_text_end = true;
+@@ -3289,7 +3289,7 @@
+     where
+         T: serde::de::DeserializeOwned,
+     {
+-        de::from_custom_reader(custom_reader(input))
++        T::deserialize(&mut de::Deserializer::borrowing(custom_reader(input)))
+     }
+ 
+     // Helper to compress the human readable and indented examples below
+@@ -3435,12 +3435,7 @@
+         </PointData>
+         </Piece>"#;
+ 
+-        let mut reader = quick_xml::reader::Reader::from_str(piece);
+-        let config = reader.config_mut();
+-        config.expand_empty_elements = true;
+-        config.trim_text_end = true;
+-        config.trim_text_start = true;
+-        let vtk: Piece = de::from_custom_reader(reader)?;
++        let vtk: Piece = from_str(piece)?;
+         // eprintln!("{:#?}", &vtk);
+         let as_str = se::to_string(&vtk)?;
+         assert_eq!(as_str, compress_xml_str(piece));
+--- a/src/xml/se.rs
++++ b/src/xml/se.rs
+@@ -1,68 +1,27 @@
+-//! Module to handle custom serde `Serializer`
+-//!
+-//! This module serves as a patch for the quick_xml serde support.
++//! XML serialization through quick-xml's UTF-8 writer.
+ 
+-use quick_xml::DeError;
++use quick_xml::{se, SeError};
+ use serde::ser::Serialize;
+ 
+-#[cfg(not(feature = "binary"))]
+-struct ByteWriter<W>(W)
+-where
+-    W: std::io::Write;
+-
+-#[cfg(not(feature = "binary"))]
+-impl<W: std::io::Write> std::fmt::Write for ByteWriter<W> {
+-    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+-        self.0.write(s.as_bytes()).map_err(|_| std::fmt::Error)?;
+-        std::fmt::Result::Ok(())
+-    }
++/// Serialize to an `io::Write`r, including any final flush errors.
++pub fn to_writer<W: std::io::Write, S: Serialize>(mut writer: W, value: &S) -> Result<(), SeError> {
++    se::to_utf8_io_writer(&mut writer, value)?;
++    writer.flush()?;
++    Ok(())
+ }
+ 
+-#[cfg(not(feature = "binary"))]
+-impl<W: std::io::Write> std::io::Write for ByteWriter<W> {
+-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+-        self.0.write(buf)
+-    }
+-
+-    fn flush(&mut self) -> std::io::Result<()> {
+-        self.0.flush()
+-    }
++/// Serialize to a `fmt::Write`r.
++pub fn to_fmt_writer<W: std::fmt::Write, S: Serialize>(writer: W, value: &S) -> Result<(), SeError> {
++    se::to_writer(writer, value).map(|_| ())
+ }
+ 
+-/// Serialize struct into an  `io::Write`r
+-#[cfg(feature = "binary")]
+-pub fn to_writer<W: std::io::Write, S: Serialize>(writer: W, value: &S) -> Result<(), DeError> {
+-    let mut buf_writer = std::io::BufWriter::new(writer);
+-    let serializer = quick_xml::se::io::Serializer::new(&mut buf_writer);
+-    value.serialize(serializer)
++/// Serialize to a `String`.
++pub fn to_string<S: Serialize>(value: &S) -> Result<String, SeError> {
++    se::to_string(value)
+ }
+ 
+-#[cfg(not(feature = "binary"))]
+-pub fn to_writer<W: std::io::Write, S: Serialize>(writer: W, value: &S) -> Result<(), DeError> {
+-    let mut buf_writer = ByteWriter(std::io::BufWriter::new(writer));
+-    let serializer = quick_xml::se::Serializer::new(&mut buf_writer);
+-    value.serialize(serializer)
+-}
+-
+-/// Serialize struct into a `fmt::Write`r
+-pub fn to_fmt_writer<W: std::fmt::Write, S: Serialize>(
+-    mut writer: W,
+-    value: &S,
+-) -> Result<(), DeError> {
+-    let serializer = quick_xml::se::Serializer::new(&mut writer);
+-    value.serialize(serializer)
+-}
+-
+-/// Serialize struct into a `String`
+-pub fn to_string<S: Serialize>(value: &S) -> Result<String, DeError> {
+-    let mut s = String::new();
+-    let serializer = quick_xml::se::Serializer::new(&mut s);
+-    value.serialize(serializer)?;
+-    Ok(s)
+-}
+-
+-/// Serialize struct into a `Vec<u8>`
+-pub fn to_bytes<S: Serialize>(value: &S) -> Result<Vec<u8>, DeError> {
++/// Serialize to a `Vec<u8>`.
++pub fn to_bytes<S: Serialize>(value: &S) -> Result<Vec<u8>, SeError> {
+     let mut bytes = Vec::new();
+     to_writer(&mut bytes, value)?;
+     Ok(bytes)
