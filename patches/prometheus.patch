@@ -1,0 +1,92 @@
+diff --git a/src/encoder/text.rs b/src/encoder/text.rs
+index e524722..cd311b3 100644
+--- a/src/encoder/text.rs
++++ b/src/encoder/text.rs
+@@ -150,7 +150,11 @@ impl TextEncoder {
+                         )?;
+                     }
+                     MetricType::UNTYPED => {
+-                        unimplemented!();
++                        #[cfg(feature = "protobuf")]
++                        let value = m.untyped.value();
++                        #[cfg(not(feature = "protobuf"))]
++                        let value = m.get_untyped().get_value();
++                        write_sample(writer, name, None, m, None, value)?;
+                     }
+                 }
+             }
+@@ -318,6 +322,32 @@ mod tests {
+     use crate::histogram::{Histogram, HistogramOpts};
+     use crate::metrics::{Collector, Opts};
+ 
++    #[test]
++    fn test_text_encoder_untyped() {
++        let mut label = proto::LabelPair::default();
++        label.set_name("source".into());
++        label.set_value("sensor".into());
++        let mut metric = proto::Metric::from_label(vec![label]);
++        let mut untyped = proto::Untyped::default();
++        untyped.set_value(-7.25);
++        #[cfg(feature = "protobuf")]
++        {
++            metric.untyped = Some(untyped).into();
++        }
++        #[cfg(not(feature = "protobuf"))]
++        metric.set_untyped(untyped);
++        metric.set_timestamp_ms(123);
++        let mut family = proto::MetricFamily::default();
++        family.set_name("legacy_value".into());
++        family.set_help("Legacy sensor".into());
++        family.set_field_type(MetricType::UNTYPED);
++        family.set_metric(vec![metric]);
++        assert_eq!(
++            TextEncoder::new().encode_to_string(&[family]).unwrap(),
++            "# HELP legacy_value Legacy sensor\n# TYPE legacy_value untyped\nlegacy_value{source=\"sensor\"} -7.25 123\n"
++        );
++    }
++
+     #[test]
+     fn test_escape_string() {
+         assert_eq!(r"\\", escape_string("\\", false));
+diff --git a/src/plain_model.rs b/src/plain_model.rs
+index 1db10a6..14d9740 100644
+--- a/src/plain_model.rs
++++ b/src/plain_model.rs
+@@ -197,18 +197,10 @@ impl Untyped {
+         Default::default()
+     }
+ 
+-    #[deprecated(
+-        note = "Untyped struct is protobuf specific and will be removed in a future version",
+-        since = "0.5.1"
+-    )]
+     pub fn set_value(&mut self, v: f64) {
+         self.value = v;
+     }
+ 
+-    #[deprecated(
+-        note = "Untyped struct is protobuf specific and will be removed in a future version",
+-        since = "0.5.1"
+-    )]
+     pub fn get_value(&self) -> f64 {
+         self.value
+     }
+@@ -367,18 +359,10 @@ impl Metric {
+         &self.summary
+     }
+ 
+-    #[deprecated(
+-        note = "This method is protobuf specific and will be removed in a future version",
+-        since = "0.5.1"
+-    )]
+     pub fn set_untyped(&mut self, v: Untyped) {
+         self.untyped = v;
+     }
+ 
+-    #[deprecated(
+-        note = "This method is protobuf specific and will be removed in a future version",
+-        since = "0.5.1"
+-    )]
+     pub fn get_untyped(&self) -> &Untyped {
+         &self.untyped
+     }
