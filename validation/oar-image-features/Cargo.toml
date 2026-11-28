@@ -12,6 +12,8 @@ exclude = ["oar-ocr", "oar-ocr-core"]
 default = ["encoded-formats"]
 encoded-formats = ["image/png", "image/pnm"]
 full-formats = ["oar-ocr/image-formats"]
+formula-recognition = ["oar-ocr/formula-recognition"]
+indra = ["oar-ocr/indra"]
 
 [dependencies]
 image = { version = "0.25.10", default-features = false }

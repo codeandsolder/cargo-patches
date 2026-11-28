@@ -52,6 +52,11 @@ select only its own encoded formats through `image`. Both OAR packages
 retain Rayon for image processing, without the unused imageproc text
 and FFT subsystems. ZIP explicitly selects its own zlib-rs backend so
 Indra NPZ loading does not depend on accidental PNG/TIFF feature
-unification. Recognition algorithms and model provisioning are unchanged.
+unification. Formula recognition and Indra are also independently selectable, enabled by
+the standalone defaults. Ordinary text OCR, high-level layout and table
+analysis do not need either pipeline. Formula-specific builder methods and
+registry entries exist only when their feature is enabled. Shared reading
+order helpers are independent of Indra. Recognition algorithms and model
+provisioning are unchanged.
 The validation workspace exercises raw RGB, narrow PNG/PNM, and full
 format configurations through the actual OAR utility APIs.
