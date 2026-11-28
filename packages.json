@@ -241,5 +241,13 @@
       "checksum": "9f64b19efc02f0dd6cac1d462e20a1098f425f09cb13624efbb1b7d63f061735",
       "patch": "patches/brush-parser.patch"
     }
+  ],
+  "worker-time": [
+    {
+      "name": "worker",
+      "version": "0.9.0",
+      "checksum": "1d055db1ea6baa6c329730897f63ff7b6ac93c46a9f053804e497e5960eb98e3",
+      "patch": "patches/worker.patch"
+    }
   ]
 }
